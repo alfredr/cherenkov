@@ -25,6 +25,13 @@ jobs:
         uses: jdx/mise-action@v4
         with:
           install_args: rust github:rust-lang/mdBook
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2.9.2
+        with:
+          key: docs-macos-26
+          cache-bin: false
+          # Includes the nested target/site-rustdoc dependency build.
+          workspaces: ". -> target"
       - name: Test the docs builder
         run: cargo test --locked -p xtask --test docs --test readme --test automation
       - name: Build the site

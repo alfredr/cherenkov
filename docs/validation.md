@@ -37,6 +37,13 @@ Pull requests check Rust formatting and statement spacing on Ubuntu and
 run the test suite on macOS 15 and 26. The macOS jobs include synthetic Metal
 tests; real-weight checks need a local model.
 
+GitHub Actions caches Cargo downloads and compiled dependencies after successful
+runs. Test caches are separate for macOS 15 and 26; docs and author checks use
+separate caches. Rust versions, Cargo manifests, and lockfiles contribute to
+cache keys. Workspace crates are rebuilt, and the docs build regenerates the
+API reference while reusing dependencies from `target/site-rustdoc`. The first
+run for a new cache is cold; later compatible runs can restore it.
+
 Read the contribution terms in [AUTHORS](../AUTHORS), then acknowledge them
 by adding your own entry as `Name <git-email> (@github-login)`. You can do this
 in your first PR and use a GitHub noreply address. Later PRs reuse that entry.
