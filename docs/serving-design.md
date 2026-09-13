@@ -17,6 +17,7 @@ for limits and defaults.
 | `sessions` | History, sampling state, and transactional turns |
 | `output` | Writer queues and final publication |
 | `response` | Chat and text response formats |
+| `tool_call` | Incremental tool-call parsing and argument normalization |
 | `failure` | HTTP error classification |
 | `stats` | Usage shared by active requests and committed sessions |
 
@@ -90,6 +91,11 @@ request limit reduces admission and checkpoint reservations, not GPU buffers.
 
 Tool calling uses the checkpoint template and XML-style output parser. The
 client executes the returned calls; sessions retain them for later turns.
+The worker tracks raw decoded bytes for reconciliation and response limits,
+and accumulates parsed content separately. Final tokenizer bytes pass through
+the parser before it closes. Streaming text, JSON content, and committed
+session content use the same accumulated text. Recovered calls preserve a
+`length` finish reason when generation reaches its token budget.
 See [tool calling](running.md#tool-calling) for supported request controls.
 
 Effort controls, the Responses API, sampled MTP, and cross-request GPU batching
@@ -97,5 +103,7 @@ are unsupported. Chat uses the checkpoint template with thinking disabled.
 
 Tests cover sampler continuation, pending tokens, commit/cancel ordering,
 retention, memory admission, state restoration, and interleaved HTTP streams.
+Worker tests also cover tool-call content across streaming, JSON, and sessions,
+fallback delivery, final tokenizer bytes, and truncation finish reasons.
 See [validation](validation.md) for commands. Concurrency throughput has not
 been established by these correctness tests.
