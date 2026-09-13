@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn model_source_references_reach_generation_and_subcommands() {
+    let reference = "model:hf:example/model-q4:abcdef01";
+    let cli = Cli::try_parse_from(["cherenkov", reference, "hello"]).unwrap();
+
+    assert_eq!(
+        cli.model_dir.as_deref(),
+        Some(std::path::Path::new(reference))
+    );
+
+    for command in ["pack", "inspect"] {
+        assert!(Cli::try_parse_from(["cherenkov", command, reference]).is_ok());
+    }
+
+    for command in ["show", "remove"] {
+        assert!(Cli::try_parse_from(["cherenkov", "model", command, reference]).is_ok());
+    }
+
+    let cli = Cli::try_parse_from(["cherenkov", "serve", "--model", reference]).unwrap();
+    let Some(Command::Serve(args)) = cli.command else {
+        panic!("serve expected");
+    };
+
+    assert_eq!(args.overrides.model.as_deref(), Some(reference));
+}
+
+#[test]
 fn pack_accepts_default_single_and_multiple_precisions() {
     for (args, expected) in [
         (vec![], vec![4]),
@@ -11,7 +37,7 @@ fn pack_accepts_default_single_and_multiple_precisions() {
     ] {
         let cli =
             Cli::try_parse_from(["cherenkov", "pack", "/model"].into_iter().chain(args)).unwrap();
-        let Some(Command::Pack {
+        let Some(Command::Prepare {
             experts, model_dir, ..
         }) = cli.command
         else {
@@ -238,7 +264,7 @@ fn portable_root_and_default_config_work_without_a_model_argument() {
     assert_eq!(config.server.root.as_deref(), Some(dir.path()));
     assert_eq!(
         config.model_dir().unwrap(),
-        Paths::new(Some(dir.path())).unwrap().default_model()
+        PathBuf::from(cherenkov::storage::default_model_reference())
     );
 
     for args in [
@@ -248,4 +274,53 @@ fn portable_root_and_default_config_work_without_a_model_argument() {
     ] {
         assert!(Cli::try_parse_from(["cherenkov"].into_iter().chain(args)).is_ok());
     }
+}
+
+#[test]
+fn indexed_commands_parse_without_a_model_path() {
+    for args in [
+        vec!["model", "list", "--json"],
+        vec!["prepare", "hf://Example/Tiny@abcdef01", "--name", "tiny"],
+        vec!["prepare", "disk://models/Example/Tiny", "--experts", "2,3"],
+        vec!["store", "add", "models", "/models"],
+        vec!["store", "add", "cache", "/cache", "--layout", "hf-cache"],
+        vec!["store", "list", "--json"],
+        vec!["store", "disable", "models"],
+        vec!["serve", "--model", "tiny"],
+        vec![
+            "model",
+            "add",
+            "hf://example/tiny",
+            "--revision",
+            "main",
+            "--name",
+            "tiny",
+        ],
+        vec!["model", "show", "model:tiny"],
+        vec!["model", "remove", "model:tiny", "--source-only"],
+        vec!["model", "gc", "--dry-run", "--json"],
+        vec!["inspect", "model:tiny", "--json"],
+        vec!["pack", "model:tiny", "--experts", "4,3,2", "--keep-source"],
+        vec!["serve", "--model", "model:tiny", "--print-config"],
+    ] {
+        assert!(Cli::try_parse_from(std::iter::once("cherenkov").chain(args)).is_ok());
+    }
+
+    assert!(Cli::try_parse_from(["cherenkov", "serve", "/path", "--model", "model:tiny"]).is_err());
+}
+
+#[test]
+fn indexed_server_arguments_are_not_made_into_relative_paths() {
+    let root = tempfile::tempdir().unwrap();
+    let cli = Cli::try_parse_from(["cherenkov", "serve", "model:tiny"]).unwrap();
+    let Some(Command::Serve(serve)) = cli.command else {
+        panic!("serve expected")
+    };
+    let config = serve
+        .source(Some(root.path().to_owned()))
+        .unwrap()
+        .resolve()
+        .unwrap();
+
+    assert_eq!(config.model_dir().unwrap(), PathBuf::from("model:tiny"));
 }

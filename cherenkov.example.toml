@@ -2,6 +2,7 @@
 # Explicit CLI flags override this file, including after reload.
 
 [server]
+# model = "my-model" # Indexed model; mutually exclusive with model_dir.
 # model_dir = "/path/to/model" # Omitted: use the pinned managed model.
 # root = "/Volumes/Models/cherenkov" # Omitted: XDG data, cache and config directories.
 port = 8080

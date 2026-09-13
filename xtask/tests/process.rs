@@ -31,9 +31,9 @@ impl Fixture {
         let root = directory.path();
         let binary = root.join("engine");
 
-        fs::write(
+        write_engine(
             &binary,
-            "#!/bin/sh\ndir=$(dirname \"$0\")\necho $$ > \"$dir/pid\"\n[ -z \"${CHERENKOV_FN_FAKE+x}\" ] || exit 99\ncat \"$dir/answer\"\ncat \"$dir/telemetry\" >&2\n",
+            "echo $$ > \"$dir/pid\"\n[ -z \"${CHERENKOV_FN_FAKE+x}\" ] || exit 99\ncat \"$dir/answer\"\ncat \"$dir/telemetry\" >&2\n",
         )?;
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))?;
         fs::write(
@@ -76,11 +76,17 @@ impl Fixture {
     }
 
     fn command(&self) -> Command {
+        self.command_for(&self.model)
+    }
+
+    fn command_for(&self, selector: impl AsRef<std::ffi::OsStr>) -> Command {
+        self.write_inspection().expect("fixture inspection");
+
         let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
 
         command
             .arg("bench")
-            .arg(&self.model)
+            .arg(selector)
             .arg("--binary")
             .arg(&self.binary)
             .arg("--suite")
@@ -88,14 +94,57 @@ impl Fixture {
             .arg("--output")
             .arg(&self.output)
             .arg("--allow-battery")
+            .arg("--root")
+            .arg(self.directory.path().join("index"))
             .env("CHERENKOV_FN_FAKE", "1");
 
         command
     }
 
+    /// Simulate the engine's resolved identity and validated variant inventory.
+    fn write_inspection(&self) -> Result<()> {
+        use sha2::{Digest, Sha256};
+
+        let model = self.model.canonicalize()?;
+        let id: String = Sha256::digest(model.as_os_str().as_encoded_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let mut precisions = vec![4];
+
+        for bits in [3, 2] {
+            if model.join(format!("packed/experts{bits}.bin")).is_file()
+                && model.join(format!("packed/manifest{bits}.json")).is_file()
+            {
+                precisions.push(bits);
+            }
+        }
+
+        util::write_json(
+            &self.directory.path().join("inspection.json"),
+            &json!({"index": {
+                "id": id, "precisions": precisions,
+                "source": {"kind": "local", "path": model},
+                "artifacts": [{"kind": "prepared", "available": true, "path": model.join("packed")}]
+            }}),
+        )
+    }
+
     fn report(&self) -> Result<Value> {
         util::json(&self.output.join("report.json"))
     }
+}
+
+/// Support untimed inspection independently of the simulated inference process.
+fn write_engine(path: &std::path::Path, body: &str) -> Result<()> {
+    fs::write(
+        path,
+        format!(
+            "#!/bin/sh\ndir=$(dirname \"$0\")\nif [ \"$1\" = inspect ]; then cat \"$dir/inspection.json\"; exit; fi\n{body}"
+        ),
+    )?;
+
+    Ok(())
 }
 
 fn successful(output: Output) {
@@ -172,7 +221,7 @@ fn legacy_resume_migrates_paths_and_preserves_completed_samples() -> Result<()> 
     legacy["signature"]
         .as_object_mut()
         .unwrap()
-        .remove("model_path_sha256");
+        .remove("model_id");
 
     legacy["signature"]["model"] = json!(model);
     legacy["suite_revisions"] = json!([{"previous_signature": legacy["signature"]}]);
@@ -262,7 +311,7 @@ fn repeated_resume_preserves_paths_in_user_supplied_suite_contents() -> Result<(
             saved["signature"]
                 .as_object_mut()
                 .unwrap()
-                .remove("model_path_sha256");
+                .remove("model_id");
 
             saved["signature"]["model"] = json!(model);
             saved["provenance"]["binary"] = json!(binary);
@@ -317,7 +366,7 @@ fn resume_rejects_a_different_directory_with_identical_metadata() -> Result<()> 
             saved["signature"]
                 .as_object_mut()
                 .unwrap()
-                .remove("model_path_sha256");
+                .remove("model_id");
 
             saved["signature"]["model"] = json!(original_model);
         }
@@ -370,7 +419,7 @@ fn light_mode_skips_stores_without_a_completed_manifest() -> Result<()> {
 
     successful(
         fixture
-            .command()
+            .command_for("disk://models/Example/Tiny")
             .args(["--mode", "light", "--cases", "code"])
             .output()?,
     );
@@ -383,7 +432,7 @@ fn light_mode_skips_stores_without_a_completed_manifest() -> Result<()> {
     fs::write(fixture.model.join("packed/manifest2.json"), "{}")?;
 
     let plan = fixture
-        .command()
+        .command_for("tiny")
         .args(["--mode", "light", "--cases", "code", "--dry-run"])
         .output()?;
 
@@ -478,9 +527,9 @@ fn timeout_reaps_the_engine() -> Result<()> {
 fn interrupt_reaps_the_engine_and_leaves_a_resumable_report() -> Result<()> {
     let fixture = Fixture::new(128)?;
 
-    fs::write(
+    write_engine(
         &fixture.binary,
-        "#!/bin/sh\ndir=$(dirname \"$0\")\necho $$ > \"$dir/pid\"\nexec /bin/sleep 60\n",
+        "echo $$ > \"$dir/pid\"\nexec /bin/sleep 60\n",
     )?;
 
     let mut parent = capture::ChildGuard(

@@ -1,5 +1,15 @@
 # Benchmarks
 
+The runner accepts an indexed alias, source URI, or prepared directory. It uses
+the index to find the artifact and accepts both flat stores and older
+`model/packed` layouts. Use `--root DIR` if the model is in a separate index.
+Model inspection runs outside the timed inference capture.
+
+```sh
+cargo xtask bench flash --build-stores --update-readme
+cargo xtask bench disk://models/owner/repo --root /path/to/index
+```
+
 The suite requires Rust, Metal, and a packed checkpoint. Run on AC power with other
 inference, builds, and GPU tests stopped. Prefix commands with
 `mise exec --` if Mise is not active in your shell.
@@ -31,6 +41,8 @@ itself (`--archive` does the same for any run), so one file holds
 Attach it to a pull request or issue. Explicit `--configs`, `--cases`, and
 `--rounds` override a preset's choices.
 
+Light mode consults the model index, including for `--dry-run`.
+
 Each report records the machine in `provenance.hardware_detail`: kernel,
 memory, CPU thread count, and the capacity and free space of the volume
 holding the model, all read through libc; on macOS also the chip, GPU core
@@ -38,7 +50,8 @@ count, OS version, and NVMe model and capacity from `system_profiler`; and a
 two-gigabyte uncached read sample of the expert store in GB/s taken before
 the first sample. Automatic machine metadata excludes serial numbers,
 device identifiers, the hostname, and home-directory paths. The runner's
-binary and model arguments appear as `<binary>` and `<model>`. Custom suite
+binary and model arguments appear as `<binary>` and `<model>`; the runner's
+`--root` path appears as `<root>`. Custom suite
 prompts and configuration arguments, generated answers, and `--note` text
 are preserved verbatim. `--note` records conditions such as power or other load.
 `settings` records the context capacity and cap overrides; the suite path
@@ -106,10 +119,10 @@ Results default to `results/<UTC timestamp>/` and are written after each sample.
 New runs are ignored by Git. Use `git add -f results/<name>` to retain one.
 SVG rates are reported separately; malformed or incomplete SVGs are invalid.
 
-`--resume` requires matching binaries, model, suite, and selections. A hash
-of the canonical model path preserves directory identity without recording
-the path itself. Older reports containing that path are migrated on resume;
-reports containing only `<model>` without a directory hash require a new run.
+`--resume` requires matching binaries, indexed model identity, metadata, suite,
+and selections. Reports store the model ID rather than its local path. Older
+reports can migrate when their path or path hash matches the indexed local
+source. Reports containing only `<model>` without an identity require a new run.
 It skips successful and content-invalid samples. Engine errors, memory-limit failures,
 and power changes stop the suite and are retried on resume.
 

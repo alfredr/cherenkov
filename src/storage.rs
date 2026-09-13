@@ -6,19 +6,32 @@ use serde::Serialize;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+/// HF repository used when no model is selected.
 pub const DEFAULT_REPO: &str = "Sawfwair/Qwen3.8-Flash-Next-MLX-4bit";
+/// Immutable revision of the tested default checkpoint.
 pub const DEFAULT_REVISION: &str = "6cc9bbc0fae9ce26b7670b3ed1e26d557c154506";
 
+/// Source selector shared by preparation and serving when no model is specified.
+pub fn default_model_reference() -> String {
+    format!("hf://{DEFAULT_REPO}@{DEFAULT_REVISION}")
+}
+
+/// Resolved application locations, using XDG directories on macOS and Linux.
 #[derive(Debug, Clone, Serialize)]
 pub struct Paths {
     /// Downloaded checkpoints and generated stores; never automatically evicted.
     pub data: PathBuf,
     /// Disposable transfer scratch. Inference checkpoints remain in RAM.
     pub scratch: PathBuf,
+    /// Server configuration file.
     pub config: PathBuf,
 }
 
 impl Paths {
+    /// Resolve locations from an explicit root or absolute XDG overrides.
+    /// An explicit root holds data, `scratch/`, and `cherenkov.toml` together.
+    /// Without overrides, use the user's `.local/share`, `.cache`, and `.config`
+    /// directories. This does not create directories or read configuration files.
     pub fn new(root: Option<&Path>) -> Result<Self> {
         if let Some(root) = root {
             let root = crate::config::absolute(root)?;
@@ -42,16 +55,20 @@ impl Paths {
         })
     }
 
+    /// HF download cache beneath the data directory.
     pub fn downloads(&self) -> PathBuf {
         self.data.join("downloads")
     }
 
+    /// Resolve a model directory from `owner/name` and a full commit hash.
+    /// Reject unsafe path components and revisions that are not 40 hexadecimal digits.
     pub fn model(&self, repo: &str, commit: &str) -> Result<PathBuf> {
         validate_identity(repo, commit)?;
 
         Ok(self.data.join("models").join(repo).join(commit))
     }
 
+    /// Resolve the built-in checkpoint's directory without checking availability.
     pub fn default_model(&self) -> PathBuf {
         self.model(DEFAULT_REPO, DEFAULT_REVISION)
             .expect("built-in model identity")

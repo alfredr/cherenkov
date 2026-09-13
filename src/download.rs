@@ -20,6 +20,12 @@ const METADATA: &[&str] = &[
     "generation_config.json",
     "chat_template.jinja",
     "model.safetensors.index.json",
+    "LICENSE",
+    "LICENSE.txt",
+    "LICENSE.md",
+    "NOTICE",
+    "NOTICE.txt",
+    "NOTICE.md",
 ];
 
 pub struct Download<'a> {
@@ -35,6 +41,14 @@ struct Index {
 }
 
 pub fn run(paths: &Paths, request: Download<'_>) -> Result<PathBuf> {
+    run_at(paths, request, None)
+}
+
+pub(crate) fn run_at(
+    paths: &Paths,
+    request: Download<'_>,
+    endpoint: Option<&str>,
+) -> Result<PathBuf> {
     // Validate path components before contacting the Hub. Branch names themselves
     // are sent to the API, then replaced with the returned immutable commit.
     paths.model(request.repo, storage::DEFAULT_REVISION)?;
@@ -51,6 +65,10 @@ pub fn run(paths: &Paths, request: Download<'_>) -> Result<PathBuf> {
         .context("another download is using this root")?;
 
     let mut builder = HFClient::builder().cache_dir(paths.downloads());
+
+    if let Some(endpoint) = endpoint {
+        builder = builder.endpoint(endpoint);
+    }
 
     if let Some(token) = request.token {
         ensure!(!token.trim().is_empty(), "HF token must not be empty");

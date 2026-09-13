@@ -3,13 +3,14 @@ use cherenkov::{
     config::{self, Overrides, Source},
     control, download,
     options::Options,
-    qwen4_exp, runner,
+    runner,
     storage::{DEFAULT_REPO, DEFAULT_REVISION, Paths},
 };
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 mod cli_output;
+mod model_cli;
 
 #[derive(Parser)]
 #[command(
@@ -82,7 +83,29 @@ enum Command {
     },
     /// Show resolved data, scratch, config and default model locations
     Paths,
-    /// Download the supported checkpoint, with native Hugging Face/Xet transfers
+    /// Manage registered models and their prepared stores
+    Model {
+        #[command(subcommand)]
+        action: model_cli::Action,
+        #[arg(long, global = true)]
+        json: bool,
+    },
+    /// Manage named filesystem stores
+    Store {
+        #[command(subcommand)]
+        action: model_cli::StoreAction,
+        #[arg(long, global = true)]
+        json: bool,
+    },
+    /// Describe a checkpoint's tensors, storage layout and preparation requirements
+    Inspect {
+        /// Model alias, source URI, checkpoint directory or GGUF file
+        path: PathBuf,
+        /// Emit the complete tensor and storage description
+        #[arg(long)]
+        json: bool,
+    },
+    /// Deprecated: use `prepare SOURCE`
     Download {
         #[arg(default_value = DEFAULT_REPO)]
         repo: String,
@@ -96,16 +119,31 @@ enum Command {
         #[arg(long)]
         metadata_only: bool,
     },
-    /// Prepare the aligned 4-bit store and selected expert variants
-    Pack {
+    /// Register a source and prepare missing inference artifacts
+    #[command(name = "prepare", alias = "pack")]
+    Prepare {
+        /// Model alias, source URI or checkpoint path
+        #[arg(value_name = "SOURCE")]
         model_dir: Option<PathBuf>,
-        /// Store directory (defaults to MODEL_DIR/packed, or MODEL_DIR if already packed)
+        /// Optional index alias for this model
+        #[arg(long)]
+        name: Option<String>,
+        /// HF branch, tag or commit (or append @revision to the source URI)
+        #[arg(long)]
+        revision: Option<String>,
+        /// Export to a new directory instead of the managed artifact store
         #[arg(long)]
         output: Option<PathBuf>,
         /// Expert precisions (4,3,2); comma-separated or repeated; reuse existing stores
         #[arg(long, default_value = "4", value_delimiter = ',', num_args = 1..,
             value_parser = clap::value_parser!(u32).range(2..=4))]
         experts: Vec<u32>,
+        /// Retain source weights downloaded for an indexed model
+        #[arg(long)]
+        keep_source: bool,
+        /// Hugging Face token for an indexed import (or HF_TOKEN)
+        #[arg(long)]
+        hf_token: Option<String>,
     },
 }
 
@@ -175,7 +213,7 @@ impl Serve {
             .overrides
             .model_dir
             .as_deref()
-            .map(config::absolute)
+            .map(|p| cherenkov::model::index::anchor_selector(p, &std::env::current_dir()?))
             .transpose()?;
         self.overrides.socket = self
             .overrides
@@ -265,6 +303,15 @@ fn main() -> Result<()> {
 
             Ok(())
         }
+        Some(Command::Model { action, json }) => {
+            model_cli::run(Paths::new(cli.root.as_deref())?, action, json)
+        }
+        Some(Command::Store { action, json }) => {
+            model_cli::store(Paths::new(cli.root.as_deref())?, action, json)
+        }
+        Some(Command::Inspect { path, json }) => {
+            model_cli::inspect(Paths::new(cli.root.as_deref())?, &path, json)
+        }
         Some(Command::Paths) => {
             let paths = Paths::new(cli.root.as_deref())?;
 
@@ -272,7 +319,8 @@ fn main() -> Result<()> {
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
                     "data": paths.data, "scratch": paths.scratch, "config": paths.config,
-                    "default_model": paths.default_model(),
+                    "default_model": cherenkov::storage::default_model_reference(),
+                    "downloaded_model": paths.default_model(),
                 }))?
             );
 
@@ -284,6 +332,8 @@ fn main() -> Result<()> {
             hf_token,
             metadata_only,
         }) => {
+            eprintln!("warning: `download` is deprecated; use `prepare SOURCE`");
+
             let paths = Paths::new(cli.root.as_deref())?;
 
             // SAFETY: download is a standalone command. No worker or transfer
@@ -308,25 +358,51 @@ fn main() -> Result<()> {
 
             Ok(())
         }
-        Some(Command::Pack {
+        Some(Command::Prepare {
             model_dir,
+            name,
+            revision,
             output,
             experts,
+            keep_source,
+            hf_token,
         }) => {
             let model_dir = match model_dir {
                 Some(dir) => dir,
-                None => Paths::new(cli.root.as_deref())?.default_model(),
+                None if revision.is_some() => PathBuf::from(format!("hf://{DEFAULT_REPO}")),
+                None => PathBuf::from(cherenkov::storage::default_model_reference()),
             };
 
-            qwen4_exp::Qwen4ExpConfig::load(&model_dir)?;
-
-            qwen4_exp::pack::prepare(&model_dir, output.as_deref(), &experts)
+            model_cli::prepare(
+                Paths::new(cli.root.as_deref())?,
+                &model_dir,
+                cherenkov::model::index::ResolveOptions {
+                    name: name.as_deref(),
+                    revision: revision.as_deref(),
+                    token: hf_token.as_deref(),
+                },
+                output.as_deref(),
+                &experts,
+                keep_source,
+            )
         }
-        None => runner::run(
-            &cli.model_dir.context("model directory required")?,
-            &cli.prompt.context("prompt required")?,
-            &cli.options,
-        ),
+        None => {
+            let mut options = cli.options;
+
+            options.validate()?;
+
+            let model = cherenkov::model::index::resolve_runtime(
+                Paths::new(cli.root.as_deref())?,
+                &cli.model_dir.context("model directory required")?,
+                &mut options,
+            )?;
+
+            runner::run(
+                &model.path,
+                &cli.prompt.context("prompt required")?,
+                &options,
+            )
+        }
     }
 }
 

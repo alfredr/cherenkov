@@ -14,26 +14,38 @@ command-line tools and [Mise](https://mise.jdx.dev/).
 ```sh
 mise install
 mise exec -- cargo build --release
-target/release/cherenkov download
-target/release/cherenkov pack
-target/release/cherenkov serve
+target/release/cherenkov prepare hf://Sawfwair/Qwen3.8-Flash-Next-MLX-4bit@6cc9bbc0 --name flash
+target/release/cherenkov serve --model flash
 ```
 
-Cherenkov requires MLX affine 4-bit weights quantized in groups of 64,
-except for the 160-column n-gram table, which uses groups of 32. We tested
+Cherenkov accepts native BF16 checkpoints or MLX affine 4-bit weights
+quantized in groups of 64 (32 for the 160-column n-gram table). We tested
 [Sawfwair/Qwen3.8-Flash-Next-MLX-4bit](https://huggingface.co/Sawfwair/Qwen3.8-Flash-Next-MLX-4bit/tree/6cc9bbc0fae9ce26b7670b3ed1e26d557c154506)
-at revision `6cc9bbc0`. The `download` command fetches this revision from
-Hugging Face and caches it locally.
+at revision `6cc9bbc0`, used in the commands above.
 
 > [!IMPORTANT]
 > The
 > [mlx-community conversion](https://huggingface.co/mlx-community/Qwen3.8-Flash-Next-4bit/blob/main/config.json)
 > uses groups of 32 for the main weights, so Cherenkov cannot load it.
 
-The built-in packer rearranges the quantized weights into aligned records,
-preserving their bits. No Python or MLX runtime is required. Allow roughly
-210 GB for the download and packed store. See [storage and downloads](docs/storage.md)
-for paths, `HF_TOKEN`, and local models.
+The built-in packer converts BF16 weights to 4-bit as it writes aligned records.
+It preserves existing MLX quantized weights bit for bit. No Python or MLX runtime
+is required. `prepare` registers the source, downloads it, and prepares the model.
+Allow roughly 210 GB during preparation. Packing removes the temporary source
+after success; add `--keep-source` to retain it.
+See [storage and downloads](docs/storage.md) for paths and `HF_TOKEN`.
+
+For a checkpoint already on disk, register its parent store once:
+
+```sh
+target/release/cherenkov store add models /path/to/models
+target/release/cherenkov prepare disk://models/Sawfwair/Qwen3.8-Flash-Next-MLX-4bit --name flash
+target/release/cherenkov serve --model flash
+```
+
+This example uses `/path/to/models/Sawfwair/Qwen3.8-Flash-Next-MLX-4bit`.
+A direct checkpoint path also works. The alias is optional; commands accept the
+source URI too. See the [model index](docs/model-index.md) for HF cache stores.
 
 ## Benchmarks
 
@@ -82,7 +94,7 @@ These are unedited model outputs from the benchmark.
 Run the full suite, save its answers and pelicans, and refresh this section:
 
 ```sh
-cargo xtask bench /path/to/model --build-stores --update-readme
+cargo xtask bench flash --build-stores --update-readme
 # Regenerate from a completed run without inference:
 cargo xtask readme results/baseline-2026-09-09
 ```
@@ -101,14 +113,27 @@ and optional retained sessions. Chat renders the checkpoint's Jinja template
 with thinking disabled. Reasoning-effort controls are not exposed yet.
 See the [HTTP API](docs/running.md).
 
-**CLI:** pass a model directory and prompt to generate directly.
+**CLI:** pass an indexed model or local directory and a prompt to generate directly.
 
 ```sh
-target/release/cherenkov /path/to/model 'Explain hash collisions.' --max-tokens 256
-target/release/cherenkov /path/to/model 'Explain hash collisions.' --experts 3
+target/release/cherenkov flash \
+  'Explain hash collisions.' --max-tokens 256
+target/release/cherenkov flash \
+  'Explain hash collisions.' --experts 3
 target/release/cherenkov status
 target/release/cherenkov --help
 ```
+
+List registered models and inspect their stores:
+
+```sh
+target/release/cherenkov model list
+target/release/cherenkov inspect flash
+```
+
+`model remove <reference>` releases the registration. `model gc --dry-run`
+previews unused managed stores; `model gc` deletes them. See the
+[model index](docs/model-index.md) for local sources, exports, and retention.
 
 ### Statistics
 
@@ -146,14 +171,14 @@ The default is **4-bit experts with two adaptive speculative drafts**.
 Prepare low-bit expert stores ahead of inference:
 
 ```sh
-target/release/cherenkov pack --experts 3       # 3-bit only
-target/release/cherenkov pack --experts 2       # 2-bit only
-target/release/cherenkov pack --experts 2,3     # both in one pass
+target/release/cherenkov prepare flash --experts 3
+target/release/cherenkov prepare flash --experts 2
+target/release/cherenkov prepare flash --experts 2,3
 ```
 
-Add a model path after `pack` to use a local checkpoint. The 4-bit base
-is built if needed and retained; selected low-bit stores coexist beside
-it. Allow about 39 GB extra for 2-bit, 54 GB for 3-bit, or 93 GB for both.
+Replace the indexed reference with a local checkpoint path to pack it directly.
+The 4-bit base is built if needed and retained; selected low-bit stores coexist
+beside it. Allow about 39 GB extra for 2-bit, 54 GB for 3-bit, or 93 GB for both.
 Existing stores are reused. Inference also builds a missing variant on
 first use.
 

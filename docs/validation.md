@@ -55,6 +55,7 @@ The compatibility command `lint-spacing` runs `check:fmt` before `check:spacing`
 ## Tests
 
 Engine unit tests are child modules in `tests/unit/`, mirroring the source.
+Container, byte-source, and discovery tests are in `crates/model-data/tests/`.
 Automation tests are in `xtask/tests/`.
 
 Pull requests run portable pre-commit checks on Ubuntu and
@@ -81,6 +82,7 @@ Run the same check locally with `cargo xtask check-author YOUR_GITHUB_LOGIN`.
 | Area | Coverage |
 | --- | --- |
 | CPU | Config, CLI, packing, quantization, paths, and context limits |
+| Model index | Registration, shared artifacts, leases, garbage collection, exports, and variant repair |
 | Server | HTTP, sampling, RNG continuation, cancellation, eviction, and memory admission |
 | Metal | Attention, argmax, experts, prefill, and complete state restoration |
 | Automation | Timing, SVGs, cycle detection, resume, cleanup, and reports |
@@ -150,7 +152,7 @@ Reports go to ignored `results/*-smoke.json` files.
 
 ## Lint limits
 
-Both workspace packages deny Rust's `dead_code` lint. `mise run check:rust` runs
+All workspace packages deny Rust's `dead_code` lint. `mise run check:rust` runs
 `cargo check --locked --workspace --all-targets`, including libraries, binaries,
 and tests. Unused private items fail the check. Public library APIs may be used
 by downstream crates, so this does not detect every unused public API.
@@ -178,3 +180,41 @@ Saved results apply to their recorded revisions.
 - Full download throughput and a fresh full-size pack have not been validated.
 - Cached and fresh runs can differ on close argmax decisions as expert
   accumulation order changes. Exact state restoration does not prevent this.
+
+## BF16 fixture
+
+The optional [Git LFS fixture](../tests/fixtures/qwen4_exp/README.md) exercises
+BF16 packing, Metal prefill and decode against the CPU reference, and CLI
+generation. It also checks mapped views, indexed source removal, variant
+replacement while readers hold leases, and external exports after collection.
+The suite also covers `store add`, `prepare`, and generation by alias.
+It includes DeltaNet, sparse attention, routed experts, and n-grams;
+it has no MTP weights. Full-size BF16 import has not been run locally.
+
+## Loading checks
+
+The model-data tests run without Metal:
+
+```sh
+cargo test -p cherenkov-model-data
+cargo test -p cherenkov-model-data --test remote -- --ignored --test-threads=3
+```
+
+The remote tests read every safetensors header at pinned Hugging Face
+revisions and check it against the shard index. They fetch byte ranges only,
+with no weight downloads. All six cases passed locally:
+
+| Checkpoint | Stored tensors | Encoding coverage |
+| --- | --- | --- |
+| Sawfwair Qwen3.8-Flash-Next MLX | 3,817 | Affine Q4, groups 64 and 32 |
+| Qwen3.8-Flash-Next | 1,658 | BF16 |
+| Qwen3.8-Flash-Next 0.2B MoE | 271 | BF16 |
+| mlx-community Qwen3.8-27B | 2,180 | Affine Q4, group 64 |
+| DeepSeek-V4.1-Flash | 96,085 | Mixed storage; FP8 encodings preserved |
+| s-zaizen DeepSeek-V4.1-Flash NVFP4 | 188,245 | Mixed storage; FP8 encodings preserved |
+
+These checks validate metadata and byte ranges, not weight contents or
+inference. DeepSeek's quantization config and stored components are retained;
+its FP4/FP8 decoding is not implemented. The local MoE fixture additionally
+tests mapped weights, native-to-packed conversion, and CPU/Metal agreement.
+The test definitions contain the repository names and full revisions.

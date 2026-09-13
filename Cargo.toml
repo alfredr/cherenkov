@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "xtask"]
+members = [".", "xtask", "crates/model-data"]
 default-members = ["."]
 resolver = "3"
 
@@ -11,7 +11,7 @@ default-run = "cherenkov"
 description = "Standalone qwen4-exp inference for Apple Silicon"
 license = "MIT"
 repository = "https://github.com/alfredr/cherenkov"
-exclude = ["results/**", "benchmarks/**", "xtask/**", ".vscode/**"]
+exclude = ["results/**", "benchmarks/**", "xtask/**", ".vscode/**", "tests/fixtures/qwen4_exp/*.safetensors", "tests/fixtures/qwen4_exp/tokenizer.json"]
 
 [lints.rust]
 dead_code = "deny"
@@ -23,6 +23,7 @@ needless_else = "warn"
 redundant_else = "warn"
 
 [dependencies]
+cherenkov-model-data = { path = "crates/model-data" }
 anstream = "1"
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
@@ -38,6 +39,8 @@ objc2-foundation = "0.3.2"
 objc2-metal = "0.3.2"
 rayon = "1.12.0"
 rand = "0.9.5"
+reqwest = { version = "0.13", features = ["blocking", "json"] }
+sha2 = "0.11"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tabled = { version = "0.22", default-features = false, features = ["derive"] }
@@ -48,5 +51,4 @@ textwrap = { version = "0.16", default-features = false, features = ["unicode-wi
 tui-scrollview = "0.6"
 
 [dev-dependencies]
-sha2 = "0.11"
 tempfile = "3"

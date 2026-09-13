@@ -326,6 +326,7 @@ version = "0.1.0"
 dependencies = [
  "anstream",
  "anyhow",
+ "cherenkov-model-data",
  "clap",
  "dirs 7.0.0",
  "half",
@@ -340,6 +341,7 @@ dependencies = [
  "rand 0.9.5",
  "ratatui",
  "rayon",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",
@@ -349,6 +351,19 @@ dependencies = [
  "tokenizers",
  "toml",
  "tui-scrollview",
+]
+
+[[package]]
+name = "cherenkov-model-data"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "memmap2",
+ "reqwest",
+ "safetensors",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -1171,6 +1186,8 @@ dependencies = [
  "allocator-api2",
  "equivalent",
  "foldhash",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -2631,6 +2648,7 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
@@ -2824,6 +2842,19 @@ name = "safe-transmute"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3944826ff8fa8093089aba3acb4ef44b9446a99a16f3bf4e74af3f77d340ab7d"
+
+[[package]]
+name = "safetensors"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79b079b829cb27a1c3c374341345ed2e8b2c0c839034522cee576c140bd7f846"
+dependencies = [
+ "hashbrown 0.16.1",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
 
 [[package]]
 name = "same-file"

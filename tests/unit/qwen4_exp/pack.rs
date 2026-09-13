@@ -1,57 +1,5 @@
 use super::*;
-use serde_json::json;
-
-fn checkpoint(dir: &Path) {
-    let mut header = serde_json::Map::new();
-    let mut data = Vec::new();
-    let mut tensor = |name: String, dtype: &str, shape: &[usize], width: usize| {
-        let start = data.len();
-        let len = shape.iter().product::<usize>() * width;
-
-        data.extend((0..len).map(|i| (i * 37 + 11) as u8));
-        header.insert(
-            name,
-            json!({
-                "dtype": dtype, "shape": shape, "data_offsets": [start, data.len()]
-            }),
-        );
-    };
-
-    for projection in ["gate_proj", "up_proj", "down_proj"] {
-        let prefix = format!("language_model.model.layers.0.mlp.switch_mlp.{projection}");
-
-        tensor(format!("{prefix}.weight"), "U32", &[2, 64, 8], 4);
-        tensor(format!("{prefix}.scales"), "BF16", &[2, 64, 1], 2);
-        tensor(format!("{prefix}.biases"), "BF16", &[2, 64, 1], 2);
-    }
-
-    let ple = "language_model.model.ple";
-    let ngram = format!("{ple}.ngram_embedding.shards.0");
-
-    tensor(format!("{ngram}.weight"), "U32", &[2, 8], 4);
-    tensor(format!("{ngram}.scales"), "BF16", &[2, 1], 2);
-    tensor(format!("{ngram}.biases"), "BF16", &[2, 1], 2);
-
-    for name in [
-        "ngram_heads_offsets",
-        "ngram_heads_vocab_sizes",
-        "layer_multipliers",
-    ] {
-        tensor(format!("{ple}.{name}"), "I64", &[1], 8);
-    }
-
-    let header = serde_json::to_vec(&header).unwrap();
-    let mut file = File::create(dir.join("model.safetensors")).unwrap();
-
-    file.write_all(&(header.len() as u64).to_le_bytes())
-        .unwrap();
-    file.write_all(&header).unwrap();
-    file.write_all(&data).unwrap();
-
-    for name in ["config.json", "tokenizer.json"] {
-        std::fs::write(dir.join(name), "{}").unwrap();
-    }
-}
+use crate::test_support::mlx_checkpoint::checkpoint;
 
 fn packed_checkpoint() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -165,10 +113,7 @@ fn default_pack_can_be_extended_from_the_packed_directory() {
 
 #[test]
 fn output_from_another_checkpoint_is_rejected() {
-    let dir = tempfile::tempdir().unwrap();
-
-    checkpoint(dir.path());
-    prepare(dir.path(), None, &[4]).unwrap();
+    let dir = packed_checkpoint();
 
     let other = tempfile::tempdir().unwrap();
     let out = dir.path().join("packed");
@@ -203,4 +148,68 @@ fn invalid_selection_does_not_create_a_base_store() {
     }
 
     assert!(!dir.path().join("packed").exists());
+}
+
+#[test]
+fn mlx_tensor_bytes_are_preserved_in_every_store() {
+    let dir = packed_checkpoint();
+
+    let source = Source::load(dir.path()).unwrap();
+    let out = dir.path().join("packed");
+    let manifest = Manifest::load(&out).unwrap();
+    let dense = std::fs::read(out.join("dense.bin")).unwrap();
+
+    for tensor in &manifest.dense {
+        let bytes = source.bytes(source.tensor(&tensor.name).unwrap()).unwrap();
+
+        assert_eq!(
+            &dense[tensor.offset as usize..(tensor.offset + tensor.nbytes) as usize],
+            bytes
+        );
+    }
+
+    let experts = std::fs::read(out.join("experts.bin")).unwrap();
+    let layout = &manifest.experts;
+    let prefix = &layout.layer_prefixes[0];
+
+    for (projection, offsets) in [
+        ("gate_proj", [layout.gate_w, layout.gate_s, layout.gate_b]),
+        ("up_proj", [layout.up_w, layout.up_s, layout.up_b]),
+        ("down_proj", [layout.down_w, layout.down_s, layout.down_b]),
+    ] {
+        for (part, offset) in ["weight", "scales", "biases"].into_iter().zip(offsets) {
+            let bytes = source
+                .bytes(
+                    source
+                        .tensor(&format!("{prefix}.{projection}.{part}"))
+                        .unwrap(),
+                )
+                .unwrap();
+            let per_expert = bytes.len() / layout.experts;
+
+            for expert in 0..layout.experts {
+                let start = expert * layout.record_stride as usize + offset as usize;
+
+                assert_eq!(
+                    &experts[start..start + per_expert],
+                    &bytes[expert * per_expert..(expert + 1) * per_expert]
+                );
+            }
+        }
+    }
+
+    let ngram = std::fs::read(out.join("ngram.bin")).unwrap();
+    let mut expected = Vec::new();
+
+    for row in 0..2 {
+        for part in ["weight", "scales", "biases"] {
+            let name = format!("language_model.model.ple.ngram_embedding.shards.0.{part}");
+            let bytes = source.bytes(source.tensor(&name).unwrap()).unwrap();
+            let row_bytes = bytes.len() / 2;
+
+            expected.extend_from_slice(&bytes[row * row_bytes..(row + 1) * row_bytes]);
+        }
+    }
+
+    assert_eq!(ngram, expected);
 }

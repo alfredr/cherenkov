@@ -40,6 +40,7 @@ jobs:
           test -s _site/docs/rust-api.html
           test -s _site/api/index.html
           test -s _site/api/cherenkov/index.html
+          test -s _site/api/cherenkov_model_data/index.html
           test -s _site/api/xtask/index.html
           test -s _site/api/cherenkov/metal/index.html
           test -s _site/api/crates.js

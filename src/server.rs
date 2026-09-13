@@ -55,7 +55,6 @@ struct Job {
 
 pub fn serve(source: Source) -> Result<()> {
     let config = source.resolve()?;
-    let model_dir = config.model_dir()?;
     let mut options = config.options();
     options.repack = source.overrides.repack;
 
@@ -64,6 +63,11 @@ pub fn serve(source: Source) -> Result<()> {
         "--repack conflicts with build_missing_store=false"
     );
     options.validate()?;
+
+    // Retain the lease until the worker and all GPU resources have been dropped.
+    let model =
+        crate::model::index::resolve_runtime(config.paths()?, &config.model_dir()?, &mut options)?;
+    let model_dir = model.path.clone();
 
     let cache_bytes = config.cache_bytes();
     let cache = PrefixCache::new(

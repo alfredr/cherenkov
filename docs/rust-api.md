@@ -1,9 +1,11 @@
 # Rust API
 
-Browse the generated reference for the workspace's two libraries:
+Browse the generated reference for the workspace libraries:
 
 - [cherenkov](../api/cherenkov/index.html): inference, model execution, storage,
   configuration, and serving.
+- [cherenkov-model-data](../api/cherenkov_model_data/index.html): checkpoint
+  formats, tensor metadata, byte access, and store discovery interfaces.
 - [xtask](../api/xtask/index.html): repository automation, documentation builds,
   and benchmark tooling.
 

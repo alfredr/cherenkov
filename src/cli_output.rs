@@ -1,6 +1,7 @@
 //! Command reports share numeric view data with future interactive clients.
 
 pub(crate) mod dash;
+pub(crate) mod models;
 mod report;
 mod stats;
 mod terminal;

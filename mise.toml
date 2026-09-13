@@ -8,6 +8,7 @@ node = "22.22.0"
 "github:rhysd/actionlint" = "1.7.12"
 shellcheck = "0.11.0"
 pre-commit = "4.6.2"
+git-lfs = "3.8.0"
 
 [settings]
 # Install explicitly with `mise install`; checks must not install unrelated tools.
@@ -38,7 +39,7 @@ run = "cargo fmt --all -- --check"
 [tasks."check:spacing"]
 description = "Check blank lines between Rust statement groups"
 wait_for = ["check:fmt"]
-run = "styling-lint check src tests xtask"
+run = "styling-lint check src tests xtask crates"
 
 [tasks.lint-spacing]
 description = "Check Rust formatting, then statement spacing (compatibility command)"
@@ -128,7 +129,7 @@ run = "cargo fmt --all"
 alias = "fix-spacing"
 description = "Format Rust and fix blank lines between statements"
 depends = ["fmt"]
-run = "styling-lint fix src tests xtask"
+run = "styling-lint fix src tests xtask crates"
 
 [tasks."fix:markdown"]
 alias = "fix-md"

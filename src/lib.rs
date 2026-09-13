@@ -5,6 +5,7 @@ pub mod control;
 pub mod download;
 mod kernels;
 mod metal;
+pub mod model;
 mod nn;
 pub mod options;
 mod prefix_cache;
@@ -18,3 +19,7 @@ pub mod storage;
 mod tensors;
 mod tok;
 mod units;
+
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+mod test_support;

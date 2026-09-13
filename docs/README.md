@@ -10,6 +10,7 @@ Changes to `main` publish automatically.
 - [Server configuration](server-config.md): TOML, memory policy and control CLI.
 - [Statistics](stats.md): summaries, detailed JSON, and the live dashboard.
 - [Storage](storage.md): paths, downloads and packed expert stores.
+- [Model index](model-index.md): named models, imports, retention and cleanup.
 - [Engine](engine.md): model execution, expert streaming and synchronization.
 - [Developer options](developer-options.md): diagnostic environment variables.
 - [Validation](validation.md): tests, linters and known limitations.
@@ -26,6 +27,8 @@ Changes to `main` publish automatically.
 | `src/control/` | Control state and statistics protocol |
 | `src/cli_output/` | Terminal reports and dashboard |
 | `src/runner/` | Resumable decoding and optional diagnostics |
+| `src/model/` | Checkpoint descriptions, model index and preparation |
+| `crates/model-data/` | Container readers, tensor encodings and byte sources |
 | `src/qwen4_exp/` | Model config, packer, CPU reference and GPU execution |
 | `kernels/` | Metal fragments grouped by common primitives and model subsystem |
 | `tests/unit/` | Engine child-module tests, mirroring the source hierarchy |

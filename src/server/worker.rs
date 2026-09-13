@@ -110,11 +110,15 @@ impl<'a> Worker<'a> {
     pub(super) fn new(
         gpu: Gpu<'a>,
         tok: &'a ChatTokenizer,
-        options: Options,
+        mut options: Options,
         cache: PrefixCache,
         state: Arc<State>,
         sessions: Arc<Mutex<Store>>,
     ) -> Self {
+        if !gpu.has_mtp() {
+            options.drafts = 0;
+        }
+
         let limits = &state.config().config.limits;
         let pacer = ChunkPacer::new(limits.prefill_quantum, limits.prefill_chunk_seconds);
 

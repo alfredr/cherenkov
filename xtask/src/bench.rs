@@ -6,15 +6,21 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use clap::{Args, ValueEnum};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
 
+mod model;
+use model::Model;
+
 #[derive(Args)]
 pub struct Options {
+    /// Indexed model alias, source URI, or prepared directory
     pub model_dir: PathBuf,
+    /// Cherenkov index root, forwarded to inspection and inference
+    #[arg(long)]
+    pub root: Option<PathBuf>,
     #[arg(long, default_value = "benchmarks/suite.json")]
     pub suite: PathBuf,
     #[arg(long)]
@@ -61,49 +67,42 @@ pub enum Mode {
 /// Cases the light preset runs when `--cases` is not given.
 pub const LIGHT_CASES: &str = "code,prose,prefill-long";
 
-/// Redact the two runner-supplied paths, preserving the suite's arguments.
-pub fn redact_args(args: &[String], model: &Path, binary: &Path) -> Vec<String> {
-    let (model, binary) = (model.to_string_lossy(), binary.to_string_lossy());
+/// Hide runner-supplied locations while preserving prompts and configuration arguments.
+pub fn redact_args(args: &mut [Value], config_args: usize) {
+    for (arg, replacement) in args.iter_mut().zip(["<binary>", "<model>"]) {
+        *arg = json!(replacement);
+    }
 
-    args.iter()
-        .enumerate()
-        .map(|(index, arg)| match index {
-            0 => arg.replace(&*binary, "<binary>"),
-            1 => arg.replace(&*model, "<model>"),
-            _ => arg.clone(),
-        })
-        .collect()
-}
+    let root_flag = 3 + config_args;
 
-/// Preserve directory identity for resume without storing the local path.
-fn model_path_digest(model: &Path) -> String {
-    Sha256::digest(model.as_os_str().as_encoded_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
-fn store_present(model: &Path, bits: u8) -> bool {
-    model.join(format!("packed/experts{bits}.bin")).is_file()
-        && model.join(format!("packed/manifest{bits}.json")).is_file()
-}
-
-fn migrate_signature(signature: &mut Value, model: &Path) {
-    // Legacy reports used the canonical path as their directory identity.
-    // Only migrate a matching path; a placeholder alone cannot prove identity.
-    if signature["model"]
-        .as_str()
-        .is_some_and(|saved| Some(saved) == model.to_str())
+    if args.get(root_flag).is_some_and(|arg| arg == "--root")
+        && let Some(value) = args.get_mut(root_flag + 1)
     {
-        signature["model_path_sha256"] = json!(model_path_digest(model));
-        signature["model"] = json!("<model>");
+        *value = json!("<root>");
     }
 }
 
-fn redact_paths(text: &str, replacements: &[(&str, &str)]) -> String {
+/// Locations the runner may include in diagnostics, ordered before their parent root.
+fn path_replacements(
+    binary: &Path,
+    model: &Model,
+    root: Option<&Path>,
+) -> Vec<(String, &'static str)> {
+    [
+        (Some(binary), "<binary>"),
+        (Some(model.directory.as_path()), "<model>"),
+        (model.source_directory.as_deref(), "<model>"),
+        (root, "<root>"),
+    ]
+    .into_iter()
+    .filter_map(|(path, label)| path.map(|p| (p.to_string_lossy().into_owned(), label)))
+    .collect()
+}
+
+fn redact_paths(text: &str, replacements: &[(String, &str)]) -> String {
     let mut text = text.to_owned();
 
-    for &(path, replacement) in replacements {
+    for (path, replacement) in replacements {
         if !path.is_empty() {
             text = text.replace(path, replacement);
         }
@@ -112,28 +111,39 @@ fn redact_paths(text: &str, replacements: &[(&str, &str)]) -> String {
     text
 }
 
-fn redact_saved_metadata(report: &mut Value, binary: &Path, model: &Path) {
+fn redact_saved_metadata(report: &mut Value, binary: &Path, model: &Model, root: Option<&Path>) {
     let saved_binary = report["provenance"]["binary"]
         .as_str()
         .unwrap_or("")
         .to_owned();
-    let binary = binary.to_string_lossy();
-    let model = model.to_string_lossy();
-    let replacements = [
-        (saved_binary.as_str(), "<binary>"),
-        (&*binary, "<binary>"),
-        (&*model, "<model>"),
-    ];
+    let saved_model = report["provenance"]["model"]
+        .as_str()
+        .unwrap_or("")
+        .to_owned();
+    let mut replacements = path_replacements(binary, model, root);
+
+    replacements.insert(0, (saved_binary, "<binary>"));
+    replacements.insert(0, (saved_model, "<model>"));
+
+    let configurations = report["configurations"].clone();
 
     // Suite contents participate in resume validation. Only redact fields
     // supplied by the runner, leaving prompts and configuration args intact.
     for key in ["runs", "previous_attempts"] {
         if let Some(runs) = report.get_mut(key).and_then(Value::as_array_mut) {
             for run in runs {
+                let config_args = configurations
+                    .as_array()
+                    .and_then(|configs| {
+                        configs
+                            .iter()
+                            .find(|config| config["id"] == run["configuration"])
+                    })
+                    .and_then(|config| config["args"].as_array())
+                    .map_or(0, Vec::len);
+
                 if let Some(args) = run["args"].as_array_mut() {
-                    for (arg, replacement) in args.iter_mut().zip(["<binary>", "<model>"]) {
-                        *arg = json!(replacement);
-                    }
+                    redact_args(args, config_args);
                 }
 
                 if let Some(error) = run["error"].as_str() {
@@ -186,9 +196,9 @@ fn set_caps(cases: &mut [Case], overrides: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn check_stores(model: &Path, configs: &[Configuration], allow_build: bool) -> Result<()> {
+fn check_stores(model: &Model, configs: &[Configuration], allow_build: bool) -> Result<()> {
     ensure!(
-        model.join("packed/manifest.json").exists(),
+        model.precisions.contains(&4),
         "model must already be packed"
     );
 
@@ -196,7 +206,7 @@ fn check_stores(model: &Path, configs: &[Configuration], allow_build: bool) -> R
         let Some(bits) = config.store_bits else {
             continue;
         };
-        let present = store_present(model, bits);
+        let present = model.precisions.contains(&bits);
 
         ensure!(
             present || allow_build,
@@ -363,7 +373,7 @@ fn record_result(
 
 struct Run<'a> {
     binary: &'a Path,
-    model: &'a Path,
+    model: &'a Model,
     out: &'a Path,
     options: &'a Options,
     max_ctx: usize,
@@ -377,11 +387,16 @@ impl Run<'_> {
         let output = format!("outputs/{id}.txt");
         let mut args = vec![
             self.binary.display().to_string(),
-            self.model.display().to_string(),
+            self.model.reference.clone(),
             case.prompt(),
         ];
 
         args.extend(config.args.clone());
+
+        if let Some(root) = &self.options.root {
+            args.extend(["--root".into(), root.display().to_string()]);
+        }
+
         args.extend([
             "--max-tokens".into(),
             case.max_tokens.to_string(),
@@ -395,9 +410,15 @@ impl Run<'_> {
 
         eprintln!("[{id}] starting");
 
+        // A previous sample may have published additional expert variants.
+        let current = Model::inspect(
+            self.binary,
+            self.model.reference.as_ref(),
+            self.options.root.as_deref(),
+        )?;
         let present = config
             .store_bits
-            .is_none_or(|b| store_present(self.model, b));
+            .is_none_or(|bits| current.precisions.contains(&bits));
         let c = capture::run(
             &args,
             &self.out.join(&output),
@@ -409,7 +430,7 @@ impl Run<'_> {
             "configuration": config.id,
             "case": case.id,
             "round": round + 1,
-            "args": redact_args(&args, self.model, self.binary),
+            "args": args,
             "output": output,
             "power_before": c.power_before,
             "power_after": c.power_after,
@@ -419,6 +440,8 @@ impl Run<'_> {
             "wall_seconds": c.wall_seconds,
             "exit_code": c.code,
         });
+
+        redact_args(record["args"].as_array_mut().unwrap(), config.args.len());
 
         if let Some(cycle) = &c.cycle {
             record["cycle"] = cycle.clone();
@@ -433,13 +456,9 @@ impl Run<'_> {
             self.options.build_stores,
             self.memory_gb,
         ) {
-            record["error"] = json!(redact_paths(
-                &error.to_string(),
-                &[
-                    (&self.binary.to_string_lossy(), "<binary>"),
-                    (&self.model.to_string_lossy(), "<model>"),
-                ]
-            ));
+            let replacements =
+                path_replacements(self.binary, self.model, self.options.root.as_deref());
+            record["error"] = json!(redact_paths(&error.to_string(), &replacements));
         }
 
         eprintln!(
@@ -449,57 +468,133 @@ impl Run<'_> {
 
         Ok(record)
     }
+    fn new_report(
+        &self,
+        signature: Value,
+        configs: &[Configuration],
+        cases: &[Case],
+    ) -> Result<Value> {
+        let Self {
+            binary,
+            model,
+            options,
+            max_ctx,
+            ..
+        } = self;
+
+        let status = util::output(&["git", "status", "--porcelain"])?;
+
+        eprintln!("Describing hardware and sampling store reads.");
+
+        Ok(json!({
+            "version": 1,
+            "signature": signature,
+            "configurations": configs,
+            "cases": cases,
+            "runs": [],
+            "settings": {
+                "suite": "<suite>",
+                "mode": options.mode.map(|m| format!("{m:?}").to_lowercase()),
+                "max_ctx": max_ctx,
+                "case_caps": options.case_cap,
+                "build_stores": options.build_stores,
+                "binary_override": options.binary.is_some(),
+                "pool": "adaptive unless a configuration passes --pool-gb; the server TOML is not read",
+                "environment": "CHERENKOV_* variables are removed from every sample",
+            },
+            "provenance": {
+                "commit": util::output(&["git", "rev-parse", "HEAD"])?,
+                "dirty": !status.is_empty(),
+                "git_status": status,
+                "source_sha256": util::source_digest()?,
+                "binary_sha256": util::digest(binary)?,
+                "binary": "<binary>",
+                "model": "<model>",
+                "model_metadata_sha256": signature["model_metadata_sha256"],
+                "utc_started": util::utc()?,
+                "platform": util::output(&["uname", "-srm"])?,
+                "hardware": util::output(&["sysctl", "-n", "machdep.cpu.brand_string"])?,
+                "memory_bytes": util::output(&["sysctl", "-n", "hw.memsize"])?,
+                "rustc": util::output(&["rustc", "--version"])?,
+                "power": capture::power(),
+                "hardware_detail": hardware::describe(&model.directory),
+                "note": options.note,
+                "method": "fresh processes; rotated interleaved rounds; separate load/prefill/decode; no check; no prefix cache; complete answers through EOS; SVG phase after timings"
+            }
+        }))
+    }
+
+    fn prepare_report(
+        &self,
+        signature: Value,
+        configs: &[Configuration],
+        cases: &[Case],
+    ) -> Result<Value> {
+        let Self {
+            out,
+            options,
+            binary,
+            model,
+            ..
+        } = self;
+
+        if options.resume {
+            let mut report = util::json(&out.join("report.json"))?;
+
+            model.migrate_signature(&mut report["signature"]);
+
+            if let Some(revisions) = report["suite_revisions"].as_array_mut() {
+                for revision in revisions {
+                    model.migrate_signature(&mut revision["previous_signature"]);
+                }
+            }
+
+            ensure!(
+                report["signature"]["model_id"].is_string(),
+                "cannot resume: saved report has no matching model identity; choose a new output directory"
+            );
+
+            if report["signature"] != signature {
+                ensure!(
+                    suite::only_higher_caps(&report["signature"], &signature),
+                    "cannot resume: binary, suite, model, or selections changed"
+                );
+                raise_saved_caps(out, &mut report, signature)?;
+            }
+
+            redact_saved_metadata(&mut report, binary, model, options.root.as_deref());
+
+            return Ok(report);
+        }
+
+        ensure!(
+            !out.exists() || fs::read_dir(out)?.next().is_none(),
+            "output directory is not empty; choose another or --resume"
+        );
+        fs::create_dir_all(out)?;
+
+        self.new_report(signature, configs, cases)
+    }
 }
 
-fn new_report(
-    signature: Value,
-    configs: &[Configuration],
-    cases: &[Case],
-    binary: &Path,
-    model: &Path,
-    options: &Options,
-    max_ctx: usize,
-) -> Result<Value> {
-    let status = util::output(&["git", "status", "--porcelain"])?;
+/// Inspect once before scheduling; each timed sample refreshes variant availability.
+fn resolve_model(options: &Options) -> Result<(PathBuf, Model)> {
+    if options.binary.is_none() {
+        util::build()?;
+    }
 
-    eprintln!("Describing hardware and sampling store reads.");
+    let binary = options
+        .binary
+        .clone()
+        .unwrap_or_else(|| util::root().join("target/release/cherenkov"))
+        .canonicalize()?;
+    let model = Model::inspect(
+        &binary,
+        options.model_dir.as_os_str(),
+        options.root.as_deref(),
+    )?;
 
-    Ok(json!({
-        "version": 1,
-        "signature": signature,
-        "configurations": configs,
-        "cases": cases,
-        "runs": [],
-        "settings": {
-            "suite": "<suite>",
-            "mode": options.mode.map(|m| format!("{m:?}").to_lowercase()),
-            "max_ctx": max_ctx,
-            "case_caps": options.case_cap,
-            "build_stores": options.build_stores,
-            "binary_override": options.binary.is_some(),
-            "pool": "adaptive unless a configuration passes --pool-gb; the server TOML is not read",
-            "environment": "CHERENKOV_* variables are removed from every sample",
-        },
-        "provenance": {
-            "commit": util::output(&["git", "rev-parse", "HEAD"])?,
-            "dirty": !status.is_empty(),
-            "git_status": status,
-            "source_sha256": util::source_digest()?,
-            "binary_sha256": util::digest(binary)?,
-            "binary": "<binary>",
-            "model": "<model>",
-            "model_metadata_sha256": signature["model_metadata_sha256"],
-            "utc_started": util::utc()?,
-            "platform": util::output(&["uname", "-srm"])?,
-            "hardware": util::output(&["sysctl", "-n", "machdep.cpu.brand_string"])?,
-            "memory_bytes": util::output(&["sysctl", "-n", "hw.memsize"])?,
-            "rustc": util::output(&["rustc", "--version"])?,
-            "power": capture::power(),
-            "hardware_detail": hardware::describe(model),
-            "note": options.note,
-            "method": "fresh processes; rotated interleaved rounds; separate load/prefill/decode; no check; no prefix cache; complete answers through EOS; SVG phase after timings"
-        }
-    }))
+    Ok((binary, model))
 }
 
 pub fn run(options: Options) -> Result<()> {
@@ -507,11 +602,21 @@ pub fn run(options: Options) -> Result<()> {
     let light = options.mode == Some(Mode::Light);
     let mut configs = suite::select(&suite.configurations, options.configs.as_deref(), |c| &c.id)?;
 
+    let resolved = if !options.dry_run || (light && options.configs.is_none()) {
+        Some(resolve_model(&options)?)
+    } else {
+        None
+    };
+
     // The light preset measures what is already on disk instead of building stores.
     if light && options.configs.is_none() {
+        let (_, model) = resolved
+            .as_ref()
+            .context("light mode requires model inspection")?;
+
         configs.retain(|c| {
             c.store_bits
-                .is_none_or(|b| store_present(&options.model_dir, b))
+                .is_none_or(|bits| model.precisions.contains(&bits))
         });
     }
 
@@ -549,19 +654,10 @@ pub fn run(options: Options) -> Result<()> {
         return Ok(());
     }
 
-    let model = options.model_dir.canonicalize()?;
+    let (binary, model) = resolved.context("benchmark model was not resolved")?;
 
     check_stores(&model, &configs, options.build_stores)?;
 
-    if options.binary.is_none() {
-        util::build()?;
-    }
-
-    let binary = options
-        .binary
-        .clone()
-        .unwrap_or_else(|| util::root().join("target/release/cherenkov"))
-        .canonicalize()?;
     let default_name = match options.mode {
         Some(Mode::Light) => format!("{}-light", util::utc()?),
         _ => util::utc()?,
@@ -572,42 +668,23 @@ pub fn run(options: Options) -> Result<()> {
             .clone()
             .unwrap_or(util::root().join("results").join(default_name)),
     )?;
+    let metadata = model.metadata()?;
     let memory_gb = util::output(&["sysctl", "-n", "hw.memsize"])?
         .parse::<f64>()
         .context("hw.memsize")?
         / 1e9;
-    let mut metadata = json!({});
-
-    for name in ["config.json", "tokenizer.json", "packed/manifest.json"] {
-        metadata[name] = json!(util::digest(&model.join(name))?);
-    }
 
     let signature = json!({
         "model_metadata_sha256": metadata,
         "binary_sha256": util::digest(&binary)?,
         "suite_sha256": util::digest(&options.suite)?,
         "model": "<model>",
-        "model_path_sha256": model_path_digest(&model),
+        "model_id": model.reference,
         "configs": configs,
         "cases": cases,
         "rounds": rounds,
         "allow_battery": options.allow_battery,
     });
-    let mut report = prepare_report(
-        &out,
-        &options,
-        signature,
-        &configs,
-        &cases,
-        &binary,
-        &model,
-        suite.max_ctx,
-    )?;
-
-    fs::create_dir_all(out.join("outputs"))?;
-    fs::create_dir_all(out.join("pelicans"))?;
-    report::write(&out, &report)?;
-
     let runner = Run {
         binary: &binary,
         model: &model,
@@ -616,6 +693,11 @@ pub fn run(options: Options) -> Result<()> {
         max_ctx: suite.max_ctx,
         memory_gb,
     };
+    let mut report = runner.prepare_report(signature, &configs, &cases)?;
+
+    fs::create_dir_all(out.join("outputs"))?;
+    fs::create_dir_all(out.join("pelicans"))?;
+    report::write(&out, &report)?;
 
     for (r, c, t) in jobs {
         let id = format!("r{}-{}-{}", r + 1, cases[t].id, configs[c].id);
@@ -665,52 +747,4 @@ pub fn run(options: Options) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn prepare_report(
-    out: &Path,
-    options: &Options,
-    signature: Value,
-    configs: &[Configuration],
-    cases: &[Case],
-    binary: &Path,
-    model: &Path,
-    max_ctx: usize,
-) -> Result<Value> {
-    if options.resume {
-        let mut report = util::json(&out.join("report.json"))?;
-
-        migrate_signature(&mut report["signature"], model);
-
-        if let Some(revisions) = report["suite_revisions"].as_array_mut() {
-            for revision in revisions {
-                migrate_signature(&mut revision["previous_signature"], model);
-            }
-        }
-
-        ensure!(
-            report["signature"]["model_path_sha256"].is_string(),
-            "cannot resume: saved report has no model directory identity; choose a new output directory"
-        );
-
-        if report["signature"] != signature {
-            ensure!(
-                suite::only_higher_caps(&report["signature"], &signature),
-                "cannot resume: binary, suite, model, or selections changed"
-            );
-            raise_saved_caps(out, &mut report, signature)?;
-        }
-
-        redact_saved_metadata(&mut report, binary, model);
-
-        return Ok(report);
-    }
-
-    ensure!(
-        !out.exists() || fs::read_dir(out)?.next().is_none(),
-        "output directory is not empty; choose another or --resume"
-    );
-    fs::create_dir_all(out)?;
-
-    new_report(signature, configs, cases, binary, model, options, max_ctx)
 }

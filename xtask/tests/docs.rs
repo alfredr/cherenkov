@@ -17,6 +17,13 @@ fn git(root: &Path, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// Track the initial files before a test mutates the working tree.
+fn track_files(root: &Path) -> Result<()> {
+    git(root, &["init", "--quiet"])?;
+
+    git(root, &["add", "."])
+}
+
 fn write_files(root: &Path, files: &[(&str, &str)]) -> Result<()> {
     for (name, text) in files {
         let path = root.join(name);
@@ -51,8 +58,7 @@ fn stages_tracked_docs_and_assets_from_the_working_tree() -> Result<()> {
 
     write_files(root, &files)?;
     fs::write(root.join(".gitattributes"), ATTRIBUTES)?;
-    git(root, &["init", "--quiet"])?;
-    git(root, &["add", "."])?;
+    track_files(root)?;
     fs::write(root.join("README.md"), "# Edited\n")?;
     fs::write(root.join("results/local.html"), "unreviewed run")?;
     docs::stage(root, site.path())?;
@@ -105,8 +111,7 @@ fn missing_tracked_document_fails_the_build() -> Result<()> {
     fs::write(root.join("book.toml"), BOOK)?;
     fs::write(root.join(".gitattributes"), ATTRIBUTES)?;
     fs::write(root.join("README.md"), "# Home\n")?;
-    git(root, &["init", "--quiet"])?;
-    git(root, &["add", "."])?;
+    track_files(root)?;
     fs::remove_file(root.join("README.md"))?;
 
     assert!(docs::stage(root, site.path()).is_err());
@@ -129,8 +134,7 @@ fn attributes_select_files_without_changing_relative_paths() -> Result<()> {
             ("notes/README.md", "excluded"),
         ],
     )?;
-    git(root, &["init", "--quiet"])?;
-    git(root, &["add", "."])?;
+    track_files(root)?;
     docs::stage(root, site.path())?;
 
     assert_eq!(
@@ -150,6 +154,7 @@ fn publishes_complete_rustdoc_tree_and_removes_stale_api_files() -> Result<()> {
     let files = [
         ("crates.js", "crate index"),
         ("cherenkov/index.html", "engine"),
+        ("cherenkov_model_data/index.html", "model data"),
         ("xtask/index.html", "automation"),
         ("static.files/main-hash.js", "script"),
         ("search.index/name/chunk.js", "search shard"),

@@ -25,6 +25,14 @@ pub struct ExpertRef<'a> {
     pub down: QLinear<'a>,
 }
 
+/// Hash parameters read from a PLE layer's dense tensors.
+#[derive(Debug)]
+pub(super) struct NgramMetadata {
+    pub multipliers: Vec<i64>,
+    pub head_offsets: Vec<u64>,
+    pub head_sizes: Vec<u64>,
+}
+
 fn map(path: &Path) -> Result<Mmap> {
     let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
 
@@ -56,12 +64,19 @@ impl Packed {
     /// `model_dir` holds config.json and tokenizer.json; the packed files
     /// live in `model_dir/packed`, or directly in a standalone packed directory.
     pub fn open(model_dir: &Path) -> Result<Self> {
-        let cfg = Qwen4ExpConfig::load(model_dir)?;
         let dir = if model_dir.join("manifest.json").is_file() {
             model_dir.to_owned()
         } else {
             model_dir.join("packed")
         };
+        // Imported checkpoints may disable an absent MTP head in their packed
+        // config. Older stores can still use metadata beside the source weights.
+        let config_dir = if dir.join("config.json").is_file() {
+            &dir
+        } else {
+            model_dir
+        };
+        let cfg = Qwen4ExpConfig::load(config_dir)?;
         let manifest = Manifest::load(&dir)?;
 
         anyhow::ensure!(
@@ -113,6 +128,23 @@ impl Packed {
             .iter()
             .map(|&c| i64::from_le_bytes(c))
             .collect())
+    }
+
+    /// Read a PLE embedding's hash parameters from the dense store for either backend.
+    pub(super) fn ngram_metadata(&self, prefix: &str) -> Result<NgramMetadata> {
+        Ok(NgramMetadata {
+            multipliers: self.i64s(&format!("{prefix}.layer_multipliers"))?,
+            head_offsets: self
+                .i64s(&format!("{prefix}.ngram_heads_offsets"))?
+                .into_iter()
+                .map(|value| value as u64)
+                .collect(),
+            head_sizes: self
+                .i64s(&format!("{prefix}.ngram_heads_vocab_sizes"))?
+                .into_iter()
+                .map(|value| value as u64)
+                .collect(),
+        })
     }
 
     /// Affine 4-bit group-64 linear layer `{prefix}.{weight,scales,biases}`.
@@ -197,7 +229,7 @@ impl Packed {
         }
     }
 
-    /// Dequantize one hashed n-gram row (dim 160, group 32) into `dst`.
+    /// Dequantize one hashed n-gram row using the manifest's width and group size.
     pub fn ngram_row(&self, id: u64, dst: &mut [f32]) {
         let n = &self.manifest.ngram;
 
@@ -223,3 +255,7 @@ impl Packed {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/qwen4_exp/packed.rs"]
+mod tests;

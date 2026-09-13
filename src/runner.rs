@@ -21,6 +21,15 @@ pub fn run(model_dir: &Path, prompt: &str, options: &Options) -> Result<()> {
         options.check,
         options.repeat,
     );
+    let t0 = std::time::Instant::now();
+    let mut model_options = options.clone();
+    let packed = qwen4_exp::packed::Packed::open(model_dir)?;
+
+    if packed.cfg.mtp_num_hidden_layers == 0 {
+        model_options.drafts = 0;
+    }
+
+    let options = &model_options;
     let tok = tok::ChatTokenizer::load(model_dir)?;
     let prompt = if raw {
         Prompt::raw(prompt.to_owned())
@@ -40,8 +49,6 @@ pub fn run(model_dir: &Path, prompt: &str, options: &Options) -> Result<()> {
         );
     }
 
-    let t0 = std::time::Instant::now();
-    let packed = qwen4_exp::packed::Packed::open(model_dir)?;
     let mut gpu = qwen4_exp::gpu::Gpu::load(&packed, max_ctx, options)?;
     let cpu = if check {
         Some(qwen4_exp::cpu::CpuModel::load(&packed)?)

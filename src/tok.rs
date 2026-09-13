@@ -12,8 +12,16 @@ pub struct ChatTokenizer {
 impl ChatTokenizer {
     pub fn load(model_dir: &Path) -> Result<Self> {
         let path = model_dir.join("tokenizer.json");
-        let inner = Tokenizer::from_file(&path)
+        let mut inner = Tokenizer::from_file(&path)
             .map_err(|e| anyhow::anyhow!("loading {}: {e}", path.display()))?;
+
+        // Checkpoints may save training-time padding and truncation. Inference
+        // uses actual prompt lengths and checks its own context budget.
+        inner.with_padding(None);
+        inner
+            .with_truncation(None)
+            .map_err(|e| anyhow::anyhow!("tokenizer truncation: {e}"))?;
+
         let tok = |s: &str| -> Result<u32> {
             inner
                 .token_to_id(s)

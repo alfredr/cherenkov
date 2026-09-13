@@ -143,15 +143,13 @@ fn chat_stream_emits_tool_calls_chunk_then_terminal_reason() {
     });
     let finish_chunk = json!({"index":0,"finish_reason":"tool_calls","delta":{}});
 
-    let mut expected = String::new();
+    let expected = expected_stream(
+        "chatcmpl-tc",
+        "chat.completion.chunk",
+        &[role_chunk, call_chunk, finish_chunk],
+        None,
+    );
 
-    for choice in [role_chunk, call_chunk, finish_chunk] {
-        let chunk = json!({"id":"chatcmpl-tc","object":"chat.completion.chunk","created":123,"model":"cherenkov","choices":[choice]});
-
-        expected.push_str(&format!("data: {chunk}\n\n"));
-    }
-
-    expected.push_str("data: [DONE]\n\n");
     assert_eq!(body, &expected);
 }
 

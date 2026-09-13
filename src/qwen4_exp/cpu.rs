@@ -244,7 +244,7 @@ fn load_layer<'a>(
         let pp = format!("{lp}.ple");
         let conv = p.bf16(&format!("{pp}.conv1d.weight"))?;
         let kernel = p.shape(&format!("{pp}.conv1d.weight"))?[2];
-        let emb = format!("{pp}.ple_embedding");
+        let ngram = p.ngram_metadata(&format!("{pp}.ple_embedding"))?;
 
         Some(PleWeights {
             key_proj: p.qlinear(&format!("{pp}.key_proj"))?,
@@ -255,17 +255,9 @@ fn load_layer<'a>(
             conv1d: conv,
             kernel,
             dilation: c.ngram_size,
-            multipliers: p.i64s(&format!("{emb}.layer_multipliers"))?,
-            head_offsets: p
-                .i64s(&format!("{emb}.ngram_heads_offsets"))?
-                .into_iter()
-                .map(|v| v as u64)
-                .collect(),
-            head_sizes: p
-                .i64s(&format!("{emb}.ngram_heads_vocab_sizes"))?
-                .into_iter()
-                .map(|v| v as u64)
-                .collect(),
+            multipliers: ngram.multipliers,
+            head_offsets: ngram.head_offsets,
+            head_sizes: ngram.head_sizes,
         })
     } else {
         None

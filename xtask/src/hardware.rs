@@ -22,15 +22,16 @@ pub const READ_SAMPLE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub const READ_SAMPLE_THREADS: usize = 8;
 const READ_BLOCK: usize = 8 * 1024 * 1024;
 
-/// Describe this machine and the volume holding `model`. A probe that fails
+/// Describe this machine and the volume holding the prepared artifact `model`.
+/// A probe that fails
 /// records its error in place instead of aborting the benchmark.
 pub fn describe(model: &Path) -> Value {
-    let store = model.join("packed/experts.bin");
+    let store = model.join("experts.bin");
     let read = if store.is_file() {
         read_rate(&store, READ_SAMPLE_BYTES, READ_SAMPLE_THREADS)
     } else {
         Err(anyhow::anyhow!(
-            "no packed expert store at <model>/packed/experts.bin"
+            "no packed expert store at <model>/experts.bin"
         ))
     };
 

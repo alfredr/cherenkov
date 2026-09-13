@@ -95,8 +95,10 @@ The renderer loads `chat_template.jinja`, falling back to the string or named
 `add_generation_prompt=true`, and `enable_thinking=false`. The template controls
 formatting and message validation. Raw CLI prompts and text completions bypass it.
 
-Packing copies template metadata to custom stores. Re-running `pack` from the
-source model fills missing template files without replacing existing files.
+Preparation copies template metadata into the artifact. Re-running `prepare`
+fills missing files from an available local or retained source, preserving
+existing metadata. Repairs publish a new artifact; active readers keep their
+original files.
 
 ## Sessions
 

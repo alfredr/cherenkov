@@ -309,6 +309,13 @@ fn usable(dir: &Path, e: &ExpertLayout, l: &Layout, records: usize) -> bool {
     spot_check(dir, e, l, records).unwrap_or(false)
 }
 
+/// Read-only readiness check shared by indexed preparation and the runtime.
+pub(crate) fn is_usable(dir: &Path, e: &ExpertLayout, bits: u32) -> Result<bool> {
+    let layout = Layout::new(e, bits)?;
+
+    Ok(usable(dir, e, &layout, e.layers * e.experts))
+}
+
 /// Re-pack a handful of records spread through the file and compare with
 /// what is stored. Reads about 15 MB, so it costs milliseconds.
 fn spot_check(dir: &Path, e: &ExpertLayout, l: &Layout, records: usize) -> Result<bool> {

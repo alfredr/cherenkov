@@ -236,7 +236,7 @@ impl<'a> Gpu<'a> {
                 };
                 let ple = if with_ple {
                     let pp = format!("{lp}.ple");
-                    let emb = format!("{pp}.ple_embedding");
+                    let ngram = p.ngram_metadata(&format!("{pp}.ple_embedding"))?;
                     let kernel = p.shape(&format!("{pp}.conv1d.weight"))?[2] as u32;
                     let span = (kernel - 1) * c.ngram_size as u32;
 
@@ -252,17 +252,9 @@ impl<'a> Gpu<'a> {
                         span,
                         hist: ctx.new_buffer(span as usize * hh * 4)?,
                         e: ctx.new_buffer(MAX_NB * c.ple_embed_dim * 4)?,
-                        multipliers: p.i64s(&format!("{emb}.layer_multipliers"))?,
-                        head_offsets: p
-                            .i64s(&format!("{emb}.ngram_heads_offsets"))?
-                            .into_iter()
-                            .map(|v| v as u64)
-                            .collect(),
-                        head_sizes: p
-                            .i64s(&format!("{emb}.ngram_heads_vocab_sizes"))?
-                            .into_iter()
-                            .map(|v| v as u64)
-                            .collect(),
+                        multipliers: ngram.multipliers,
+                        head_offsets: ngram.head_offsets,
+                        head_sizes: ngram.head_sizes,
                     })
                 } else {
                     None
@@ -318,7 +310,20 @@ impl<'a> Gpu<'a> {
             "shared expert width differs from routed experts"
         );
 
-        let max_in = hh.max(c.ple_embed_dim).max(2 * h);
+        // Reduced checkpoints can retain wide attention/DeltaNet heads even
+        // when their residual stream is small. Size scratch for every projection.
+        let max_in = [
+            hh,
+            c.ple_embed_dim,
+            2 * h,
+            c.hc_lowrank,
+            v_dim,
+            c.num_attention_heads * c.head_dim,
+            inter,
+        ]
+        .into_iter()
+        .max()
+        .unwrap();
         let half_set = |rows: usize, in_dim: usize| -> Result<HalfSet> {
             Ok(HalfSet {
                 xe: ctx.new_buffer(rows * in_dim / 2 * 2)?,

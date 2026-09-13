@@ -191,3 +191,81 @@ fn larger_memory_budgets_and_quanta_are_explicit_options() {
         assert!(config.validate().is_err());
     }
 }
+
+#[test]
+fn index_model_selection_has_explicit_precedence_and_requires_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("server.toml");
+
+    std::fs::write(&path, "[server]\nmodel = 'model:tiny'\n").unwrap();
+
+    let source = Source {
+        path: Some(path.clone()),
+        overrides: Overrides::default(),
+    };
+    let original = source.resolve().unwrap();
+
+    assert_eq!(
+        original.model_dir().unwrap(),
+        std::path::PathBuf::from("model:tiny")
+    );
+
+    let cli = Source {
+        path: Some(path.clone()),
+        overrides: Overrides {
+            model_dir: Some(dir.path().join("local")),
+            ..Default::default()
+        },
+    }
+    .resolve()
+    .unwrap();
+
+    assert!(cli.server.model.is_none());
+    assert!(original.restart_changes(&cli).contains(&"server"));
+    std::fs::write(&path, "[server]\nmodel_dir = 'local'\n").unwrap();
+
+    let cli = Source {
+        path: Some(path.clone()),
+        overrides: Overrides {
+            model: Some("model:second".into()),
+            ..Default::default()
+        },
+    }
+    .resolve()
+    .unwrap();
+
+    assert!(cli.server.model_dir.is_none());
+    std::fs::write(
+        &path,
+        "[server]\nmodel = 'model:tiny'\nmodel_dir = 'local'\n",
+    )
+    .unwrap();
+    assert!(source.resolve().is_err());
+}
+
+#[test]
+fn model_selectors_preserve_urls_and_anchor_only_explicit_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let source = Source {
+        path: Some(path.clone()),
+        overrides: Overrides::default(),
+    };
+
+    for model in ["tiny", "hf://Qwen/Tiny@abcdef01", "disk://models/Qwen/Tiny"] {
+        std::fs::write(&path, format!("[server]\nmodel = '{model}'\n")).unwrap();
+        assert_eq!(
+            source.resolve().unwrap().server.model.as_deref(),
+            Some(model)
+        );
+    }
+
+    std::fs::write(&path, "[server]\nmodel = './models/tiny'\n").unwrap();
+    assert_eq!(
+        source.resolve().unwrap().model_dir().unwrap(),
+        dir.path().join("./models/tiny")
+    );
+
+    std::fs::write(&path, "[server]\nmodel = 'https://example.com/tiny'\n").unwrap();
+    assert!(source.resolve().is_err());
+}

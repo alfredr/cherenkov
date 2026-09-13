@@ -1,7 +1,8 @@
 # Engine
 
-The Metal engine streams routed experts through a bounded cache. Other network
-weights remain resident. The CPU path is the reference used by `--check`.
+The Metal engine streams routed experts through a bounded cache. Dense weights
+remain resident, and the CPU gathers n-gram rows from a file mapping.
+The CPU path is the reference used by `--check`.
 Neither path requires MLX at runtime.
 
 ## Source map

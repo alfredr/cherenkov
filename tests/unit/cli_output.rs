@@ -50,13 +50,18 @@ fn page(data: Value, next_offset: Option<usize>) -> Value {
     .unwrap()
 }
 
+/// Render the Markdown view while leaving response construction in each test.
+fn markdown(command: &Command, response: &Value) -> String {
+    stats::View::from_response(command, response)
+        .unwrap()
+        .report()
+        .markdown()
+}
+
 #[test]
 fn summary_uses_engine_schema_and_marks_unavailable_rates() {
     let response = summary();
-    let markdown = stats::View::from_response(&Command::StatsSummary, &response)
-        .unwrap()
-        .report()
-        .markdown();
+    let markdown = markdown(&Command::StatsSummary, &response);
 
     assert!(markdown.contains("500.000"));
     assert!(markdown.contains("n/a"));
@@ -80,10 +85,7 @@ fn pages_preserve_large_counters_and_show_next_offset() {
         offset: 0,
         limit: 1,
     };
-    let markdown = stats::View::from_response(&command, &response)
-        .unwrap()
-        .report()
-        .markdown();
+    let markdown = markdown(&command, &response);
 
     assert!(markdown.contains(&u64::MAX.to_string()));
     assert!(markdown.contains("Next page: --offset 1"));
@@ -95,10 +97,7 @@ fn empty_final_page_has_no_next_page_instruction() {
         offset: 0,
         limit: 1,
     };
-    let markdown = stats::View::from_response(&command, &page(json!([]), None))
-        .unwrap()
-        .report()
-        .markdown();
+    let markdown = markdown(&command, &page(json!([]), None));
 
     assert!(markdown.contains("0 entries"));
     assert!(!markdown.contains("Next page"));

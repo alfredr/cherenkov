@@ -7,3 +7,5 @@
 /results/**/*.json site
 /LICENSE site
 /cherenkov.example.toml site
+tests/fixtures/qwen4_exp/tokenizer.json filter=lfs diff=lfs merge=lfs -text
+tests/fixtures/qwen4_exp/model.safetensors filter=lfs diff=lfs merge=lfs -text

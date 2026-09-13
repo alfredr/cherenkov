@@ -99,21 +99,73 @@ fn hardware_line_summarizes_a_report_and_tolerates_older_ones() {
 fn shared_reports_carry_no_home_directory_paths() {
     let model = Path::new("/Users/someone/.cache/models/flash");
     let binary = Path::new("/Users/someone/src/cherenkov/target/release/cherenkov");
-    let args: Vec<String> = [
+    let args: Vec<serde_json::Value> = [
         binary.to_str().unwrap(),
         model.to_str().unwrap(),
         "Write a function.",
         "--experts",
         "4",
     ]
-    .map(String::from)
+    .map(|s| json!(s))
     .to_vec();
-    let redacted = bench::redact_args(&args, model, binary);
+    let mut redacted = args.clone();
+
+    bench::redact_args(&mut redacted, 0);
 
     assert_eq!(redacted[0], "<binary>");
     assert_eq!(redacted[1], "<model>");
     assert_eq!(&redacted[2..], &args[2..]);
-    assert!(!redacted.join(" ").contains("someone"));
+    assert!(
+        !serde_json::to_string(&redacted)
+            .unwrap()
+            .contains("someone")
+    );
+}
+
+#[test]
+fn argument_redaction_preserves_custom_roots_and_hides_the_runner_root() {
+    let mut args = vec![
+        json!("/bin/engine"),
+        json!("model-id"),
+        json!("Describe /private/model"),
+        json!("--root"),
+        json!("/custom/root"),
+        json!("--root"),
+        json!("/runner/root"),
+        json!("--max-tokens"),
+        json!(64),
+    ];
+
+    bench::redact_args(&mut args, 2);
+
+    assert_eq!(
+        args,
+        vec![
+            json!("<binary>"),
+            json!("<model>"),
+            json!("Describe /private/model"),
+            json!("--root"),
+            json!("/custom/root"),
+            json!("--root"),
+            json!("<root>"),
+            json!("--max-tokens"),
+            json!(64),
+        ]
+    );
+}
+
+#[test]
+fn hardware_probe_reads_the_resolved_flat_artifact() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+
+    std::fs::write(dir.path().join("experts.bin"), vec![0_u8; 4096])?;
+
+    let description = hardware::describe(dir.path());
+
+    assert_eq!(description["store_read"]["file"], "experts.bin");
+    assert_eq!(description["store_read"]["bytes"], 4096);
+
+    Ok(())
 }
 
 #[test]

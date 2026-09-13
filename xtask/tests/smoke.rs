@@ -299,7 +299,7 @@ fn download_smoke() -> Result<()> {
 
         let model = std::path::PathBuf::from(timed_command(command, Duration::from_secs(180))?);
 
-        assert_eq!(model.to_str(), paths["default_model"].as_str());
+        assert_eq!(model.to_str(), paths["downloaded_model"].as_str());
 
         let config = xtask::util::json(&model.join("config.json"))?;
 

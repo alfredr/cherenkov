@@ -1,0 +1,26 @@
+[package]
+name = "cherenkov-model-data"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Checkpoint metadata and lazy tensor storage"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0.104"
+memmap2 = "0.9.11"
+safetensors = "0.8.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+
+[dev-dependencies]
+reqwest = { version = "0.13", features = ["blocking", "json"] }
+tempfile = "3"
+
+[lints.rust]
+dead_code = "deny"
+
+[lints.clippy]
+cognitive_complexity = "warn"
+needless_else = "warn"
+redundant_else = "warn"

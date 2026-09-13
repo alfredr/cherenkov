@@ -18,10 +18,16 @@ Precedence, from lowest to highest: built-in defaults, TOML, explicit CLI flags.
 Unknown keys and invalid combinations are errors.
 
 Without `--config`, the server reads the default file described in
-[storage](storage.md). `server.model_dir` replaces the positional model path;
-if both are omitted, the managed model is used. Relative TOML paths resolve
-from the config file's directory. Relative CLI paths resolve from the working
-directory. TOML paths do not expand `~` or shell variables.
+[storage](storage.md). Set `server.model_dir` to a local path or
+`server.model = "NAME"` to an alias or source URI in the [model index](model-index.md).
+The TOML keys are mutually exclusive. A positional CLI model path or
+`serve --model NAME` overrides either TOML selection. With no selection,
+the server selects the same pinned HF reference as `prepare`. Prepare it once
+before starting the server without a model argument.
+
+Explicit relative paths in TOML resolve from the config file's directory; CLI
+paths resolve from the working directory. Aliases and source URIs are preserved.
+Use absolute paths in TOML to avoid relying on shell expansion.
 
 `serve --print-config` prints resolved settings without loading the model.
 Explicit CLI values override TOML even when equal to built-in defaults.

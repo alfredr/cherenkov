@@ -28,13 +28,33 @@ fn populated_state() -> Arc<State> {
     state
 }
 
+/// Stop the listener before removing its temporary socket directory.
+struct SocketFixture {
+    _listener: Listener,
+    _directory: Directory,
+    socket: PathBuf,
+}
+
+impl SocketFixture {
+    fn new() -> Self {
+        let directory = Directory::new();
+        let socket = directory.0.join("control.sock");
+        let listener = Listener::start(&socket, populated_state()).unwrap();
+
+        Self {
+            _listener: listener,
+            _directory: directory,
+            socket,
+        }
+    }
+}
+
 #[test]
 fn socket_responses_round_trip_through_the_shared_stats_types() {
     use crate::control::stats::{Expert, Layer, Page, Snapshot, Summary};
 
-    let dir = Directory::new();
-    let socket = dir.0.join("control.sock");
-    let _listener = Listener::start(&socket, populated_state()).unwrap();
+    let fixture = SocketFixture::new();
+    let socket = &fixture.socket;
 
     fn round_trip<T: serde::de::DeserializeOwned + serde::Serialize>(
         socket: &Path,
@@ -46,16 +66,16 @@ fn socket_responses_round_trip_through_the_shared_stats_types() {
         assert_eq!(serde_json::to_value(decoded).unwrap(), response);
     }
 
-    round_trip::<Snapshot<Summary>>(&socket, Command::StatsSummary);
+    round_trip::<Snapshot<Summary>>(socket, Command::StatsSummary);
     round_trip::<Snapshot<Page<Layer>>>(
-        &socket,
+        socket,
         Command::StatsLayers {
             offset: 0,
             limit: 1,
         },
     );
     round_trip::<Snapshot<Page<Expert>>>(
-        &socket,
+        socket,
         Command::StatsExperts {
             layer: 0,
             offset: 0,
@@ -93,11 +113,10 @@ fn publication_swaps_complete_snapshots_and_reuses_the_old_buffer() {
 
 #[test]
 fn socket_layer_pages_aggregate_experts_without_bloating_status() {
-    let dir = Directory::new();
-    let socket = dir.0.join("control.sock");
-    let _listener = Listener::start(&socket, populated_state()).unwrap();
+    let fixture = SocketFixture::new();
+    let socket = &fixture.socket;
     let layers = query(
-        &socket,
+        socket,
         Command::StatsLayers {
             offset: 0,
             limit: 1,
@@ -118,23 +137,22 @@ fn socket_layer_pages_aggregate_experts_without_bloating_status() {
         }])
     );
 
-    let status = query(&socket, Command::Status).unwrap();
+    let status = query(socket, Command::Status).unwrap();
 
     assert!(status["stats"].get("activity").is_none());
 
-    let summary = query(&socket, Command::StatsSummary).unwrap();
+    let summary = query(socket, Command::StatsSummary).unwrap();
 
     assert_eq!(summary["reads"]["requested_reads"], 0);
 }
 
 #[test]
 fn socket_expert_pages_preserve_layer_and_expert_identity() {
-    let dir = Directory::new();
-    let socket = dir.0.join("control.sock");
-    let _listener = Listener::start(&socket, populated_state()).unwrap();
+    let fixture = SocketFixture::new();
+    let socket = &fixture.socket;
 
     let experts = query(
-        &socket,
+        socket,
         Command::StatsExperts {
             layer: 1,
             offset: 1,

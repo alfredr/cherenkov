@@ -26,6 +26,7 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Server {
+    pub model: Option<String>,
     pub model_dir: Option<PathBuf>,
     /// Optional portable root for model data, scratch and configuration.
     pub root: Option<PathBuf>,
@@ -37,6 +38,7 @@ pub struct Server {
 impl Default for Server {
     fn default() -> Self {
         Self {
+            model: None,
             model_dir: None,
             root: None,
             port: 8080,
@@ -146,9 +148,13 @@ impl Config {
     }
 
     pub fn model_dir(&self) -> Result<PathBuf> {
+        if let Some(reference) = &self.server.model {
+            return Ok(PathBuf::from(reference));
+        }
+
         Ok(match &self.server.model_dir {
             Some(dir) => dir.clone(),
-            None => self.paths()?.default_model(),
+            None => PathBuf::from(crate::storage::default_model_reference()),
         })
     }
 
@@ -169,6 +175,15 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.server.model.is_none() || self.server.model_dir.is_none(),
+            "server.model and server.model_dir are mutually exclusive"
+        );
+
+        if let Some(reference) = &self.server.model {
+            crate::model::index::validate_selector(reference)?;
+        }
+
         self.options().validate()?;
         self.validate_sessions()?;
 
@@ -303,6 +318,9 @@ impl Config {
 pub struct Overrides {
     #[arg(skip)]
     pub root: Option<PathBuf>,
+    /// Model alias, source URI or path; overrides TOML model selection
+    #[arg(long, conflicts_with = "model_dir")]
+    pub model: Option<String>,
     pub model_dir: Option<PathBuf>,
     /// HTTP port on localhost (default: 8080)
     #[arg(long)]
@@ -371,6 +389,12 @@ impl Overrides {
 
         if let Some(p) = &self.model_dir {
             server.model_dir = Some(p.clone());
+            server.model = None;
+        }
+
+        if let Some(reference) = &self.model {
+            server.model = Some(reference.clone());
+            server.model_dir = None;
         }
 
         if let Some(p) = self.port {
@@ -425,8 +449,17 @@ impl Source {
                 toml::from_str(&s).with_context(|| format!("parsing {}", path.display()))?;
             let base = path.parent().context("config path has no parent")?;
 
+            if let Some(model) = &mut c.server.model {
+                *model = crate::model::index::anchor_selector(Path::new(model), base)?
+                    .to_str()
+                    .context("model reference is not UTF-8")?
+                    .to_owned();
+            }
+
             if let Some(p) = &mut c.server.model_dir
                 && p.is_relative()
+                && p.to_str()
+                    .is_none_or(|value| reqwest::Url::parse(value).is_err())
             {
                 *p = base.join(&*p);
             }
