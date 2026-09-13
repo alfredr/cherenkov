@@ -64,6 +64,10 @@ It reads config, the shard index, and each safetensors header using byte ranges.
 Small n-gram metadata arrays may also be read, but full shards remain remote. Servers
 that ignore range requests are rejected. Remote GGUF registration is not supported.
 
+Inspection reads up to eight shard headers concurrently. The CLI reports metadata
+resolution and completed headers on stderr, including with `--json`; stdout holds
+the result. Shard names come from the weight map or repository listing.
+
 Credentials come from `--hf-token`, `HF_TOKEN`, or the HF token file. The index
 stores the repository, endpoint, and commit, but no credentials.
 
@@ -159,6 +163,12 @@ See [storage](storage.md) for root selection.
 and GPU views are used. The `cherenkov-model-data` crate describes containers,
 tensor encodings, byte reads, and optional mappings without Metal dependencies.
 HF header discovery implements that same byte-source interface.
+
+Library callers can set `ResolveOptions.events` to receive owned `ModelEvent`
+values during remote inspection. Callbacks run serially on the calling thread,
+outside the catalog lock. Keep callbacks brief, or forward events to a channel.
+Cached lookups emit no inspection events; the returned `Result` reports success
+or failure.
 
 `StoreDiscovery` adapters advertise search and enumeration separately, with their
 own typed filters such as HF's `author`. The `Discovery` dispatcher validates

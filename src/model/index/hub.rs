@@ -1,5 +1,5 @@
 //! Metadata-only HF discovery. Payload downloads use the existing HF/Xet client.
-use super::Source;
+use super::{ModelEvent, Source};
 use crate::model::{ByteSource, DataSpan, ModelDescription, ObjectId, ObjectInfo};
 use anyhow::{Context, Result, ensure};
 use cherenkov_model_data::{ContainerFormat, Inventory, read_safetensors};
@@ -15,6 +15,8 @@ use std::{
     io::{Read, Write},
     time::Duration,
 };
+
+mod headers;
 
 const METADATA_LIMIT: u64 = 64 * 1024 * 1024;
 
@@ -39,6 +41,7 @@ pub(super) fn inspect(
     repo: &str,
     revision: &str,
     token: Option<&str>,
+    events: Option<&mut dyn FnMut(ModelEvent)>,
 ) -> Result<(Source, ModelDescription)> {
     let token = token
         .map(|value| Ok(Some(value.to_owned())))
@@ -51,7 +54,7 @@ pub(super) fn inspect(
         token,
     };
 
-    hub.inspect(repo, revision)
+    hub.inspect(repo, revision, events.unwrap_or(&mut |_| {}))
 }
 
 struct Hub {
@@ -100,7 +103,16 @@ impl Hub {
         Ok(serde_json::from_slice(&bytes)?)
     }
 
-    fn inspect(&self, repo: &str, revision: &str) -> Result<(Source, ModelDescription)> {
+    fn inspect(
+        &self,
+        repo: &str,
+        revision: &str,
+        events: &mut dyn FnMut(ModelEvent),
+    ) -> Result<(Source, ModelDescription)> {
+        events(ModelEvent::Resolving {
+            source: format!("hf://{repo}@{revision}"),
+        });
+
         let (owner, name) = repo
             .split_once('/')
             .context("HF source must be owner/repo")?;
@@ -153,35 +165,13 @@ impl Hub {
         );
 
         let files: Vec<_> = files.into_iter().collect();
-        let mut objects = Vec::new();
-
-        for (id, file) in files.iter().enumerate() {
-            ensure!(
-                crate::storage::safe_component(file),
-                "unsupported shard path {file:?}"
-            );
-
-            let url = self.url(&[owner, name, "resolve", &info.sha, file])?;
-            let (prefix, size) = self.range(url.clone(), 0, 8)?;
-
-            objects.push(RemoteObject {
-                id: ObjectId(id),
-                url,
-                prefix,
-                size,
-            });
-        }
-
-        let reader = RemoteReader { hub: self, objects };
+        let shards = self.headers(&[owner, name, "resolve", &info.sha], &files, events)?;
+        let mut objects = Vec::with_capacity(shards.len());
         let mut tensors = Vec::new();
         let mut names = BTreeSet::new();
         let mut metadata = Vec::new();
 
-        for (id, file) in files.iter().enumerate() {
-            eprintln!("inspect {repo}: shard {}/{}", id + 1, files.len());
-
-            let shard = read_safetensors(&reader, ObjectId(id))?;
-
+        for (file, (object, shard)) in files.iter().zip(shards) {
             for tensor in &shard.tensors {
                 ensure!(
                     names.insert(tensor.name.clone()),
@@ -197,6 +187,7 @@ impl Hub {
                 }
             }
 
+            objects.push(object);
             metadata.push(shard.metadata);
             tensors.extend(shard.tensors);
         }
@@ -213,6 +204,13 @@ impl Hub {
             metadata: json!({"config": config, "index": index, "shards": metadata}),
             tensors,
         };
+        let reader = RemoteReader {
+            hub: self,
+            objects: &objects,
+        };
+
+        events(ModelEvent::ReadingMetadata);
+
         let description = crate::model::inspect::describe_inventory(&inventory, &reader, &config)?;
 
         Ok((
@@ -277,7 +275,7 @@ struct RemoteObject {
 }
 struct RemoteReader<'a> {
     hub: &'a Hub,
-    objects: Vec<RemoteObject>,
+    objects: &'a [RemoteObject],
 }
 
 impl ByteSource for RemoteReader<'_> {
@@ -293,7 +291,8 @@ impl ByteSource for RemoteReader<'_> {
     fn read(&self, span: &DataSpan, out: &mut dyn Write) -> Result<()> {
         let object = self
             .objects
-            .get(span.object.0)
+            .iter()
+            .find(|object| object.id == span.object)
             .context("unknown HF shard")?;
 
         ensure!(

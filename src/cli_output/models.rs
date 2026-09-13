@@ -2,10 +2,25 @@ use super::{Report, Section, TableData, terminal};
 use anyhow::Result;
 use cherenkov::model::{
     Architecture, ModelDescription,
-    index::{GcReport, ModelDetails, ModelSummary, Removal, Source},
+    index::{GcReport, ModelDetails, ModelEvent, ModelSummary, Removal, Source},
 };
 use serde::Serialize;
 use std::io::IsTerminal;
+
+/// Render operation events separately from text and JSON result views.
+pub(crate) fn progress(event: ModelEvent) {
+    match event {
+        ModelEvent::Resolving { source } => eprintln!("inspect {source}: resolving metadata"),
+        ModelEvent::Headers {
+            completed,
+            total,
+            file: Some(file),
+        } => eprintln!("inspect: headers {completed}/{total} ({file})"),
+        ModelEvent::Headers { total, .. } => eprintln!("inspect: reading {total} shard headers"),
+        ModelEvent::ReadingMetadata => eprintln!("inspect: reading model metadata"),
+        _ => {}
+    }
+}
 
 pub(crate) fn list(models: &[ModelSummary], json: bool) -> Result<()> {
     let rows = models
