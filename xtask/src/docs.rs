@@ -11,36 +11,32 @@ pub fn build() -> Result<()> {
 
     // Keep the nested Cargo invocation separate from the running xtask's cache.
     // Rustdoc output is cumulative, so remove old docs while retaining builds.
-    let status = Command::new("cargo")
-        .args(["clean", "--doc", "--target-dir"])
+    let status = util::command(&["cargo", "clean", "--doc", "--target-dir"])
         .arg(&target)
-        .current_dir(&root)
         .status()
         .context("cleaning previous rustdoc output")?;
 
     ensure!(status.success(), "rustdoc cleanup failed");
 
-    let status = Command::new("cargo")
-        .args([
-            "doc",
-            "--locked",
-            "--workspace",
-            "--no-deps",
-            "--document-private-items",
-            "--target-dir",
-        ])
-        .arg(&target)
-        .env("CARGO_ENCODED_RUSTDOCFLAGS", "-Dwarnings")
-        .current_dir(&root)
-        .status()
-        .context("building workspace rustdoc")?;
+    let status = util::command(&[
+        "cargo",
+        "doc",
+        "--locked",
+        "--workspace",
+        "--no-deps",
+        "--document-private-items",
+        "--target-dir",
+    ])
+    .arg(&target)
+    .env("CARGO_ENCODED_RUSTDOCFLAGS", "-Dwarnings")
+    .status()
+    .context("building workspace rustdoc")?;
 
     ensure!(status.success(), "rustdoc build failed");
 
     stage(&root, staging.path())?;
 
-    let status = Command::new("mdbook")
-        .arg("build")
+    let status = util::command(&["mdbook", "build"])
         .arg(staging.path())
         .arg("--dest-dir")
         .arg(root.join("_site"))

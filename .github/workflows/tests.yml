@@ -1,4 +1,4 @@
-name: Unit tests
+name: Rust checks
 
 on:
   push:
@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   lint:
-    name: Rust formatting
+    name: Formatting and hooks
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -24,11 +24,9 @@ jobs:
       - name: Install Rust and linters
         uses: jdx/mise-action@v4
         with:
-          install_args: rust cargo:styling-lint
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-      - name: Check statement spacing
-        run: styling-lint check src tests xtask
+          install_args: rust node npm:markdownlint-cli2 cargo:styling-lint github:rhysd/actionlint pre-commit
+      - name: Run portable checks
+        run: mise run check:portable
 
   test:
     name: Unit tests (${{ matrix.os }})
@@ -47,5 +45,33 @@ jobs:
           install_args: rust
       - name: Show GPU information
         run: system_profiler SPDisplaysDataType
-      - name: Run unit tests and synthetic Metal checks
-        run: cargo test --locked --workspace --release -- --test-threads=1
+      - name: Check Rust targets and run unit tests
+        run: mise run check:native
+
+  coverage:
+    name: Rust coverage
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v7
+      - name: Install Rust and coverage tools
+        uses: jdx/mise-action@v4
+        with:
+          install_args: rust cargo:cargo-llvm-cov
+      - name: Run instrumented tests and generate reports
+        run: mise run coverage
+      - name: Add coverage to the job summary
+        run: |
+          echo '## Rust test coverage' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Rust source only; excludes test code and Metal shaders. Model-dependent tests skip without weights; unexecuted Rust paths remain in the totals.' >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          cat target/coverage/summary.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-coverage-${{ github.sha }}
+          path: target/coverage/
+          if-no-files-found: error
+          retention-days: 90

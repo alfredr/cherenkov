@@ -1,58 +1,150 @@
 [tools]
-rust = { version = "1.98.1", profile = "minimal", components = ["clippy", "rustfmt"] }
+rust = { version = "1.98.1", profile = "minimal", components = ["clippy", "rustfmt", "llvm-tools-preview"] }
 node = "22.22.0"
 "npm:markdownlint-cli2" = "0.23.2"
 "cargo:styling-lint" = "0.1.0"
 "github:rust-lang/mdBook" = "0.5.4"
+"cargo:cargo-llvm-cov" = "0.9.1"
+"github:rhysd/actionlint" = "1.7.12"
+pre-commit = "4.6.2"
 
-[tasks.docs]
-description = "Build the guide and workspace Rust API in _site (macOS)"
-run = "cargo xtask docs"
+[settings]
+# Install explicitly with `mise install`; checks must not install unrelated tools.
+auto_install = false
+
+# Check groups. Leaves below own the commands used by CI and pre-commit.
+[tasks.check]
+description = "Fast checks: portable lints and all Rust targets (macOS)"
+depends = ["check:portable", "check:rust"]
+
+[tasks."check:portable"]
+description = "Formatting, Markdown, workflow syntax, and hook configuration"
+depends = ["check:fmt", "check:spacing", "check:markdown", "check:workflows", "check:hooks", "check:tasks"]
+
+[tasks."check:native"]
+description = "Rust target checks and serial unit tests (macOS)"
+depends = ["check:rust", "test"]
+
+[tasks."check:full"]
+description = "Portable and native checks, Metal syntax, and the complete site"
+depends = ["check:portable", "check:native", "check:metal", "docs"]
+
+[tasks."check:fmt"]
+alias = "fmt-check"
+description = "Check Rust formatting"
+run = "cargo fmt --all -- --check"
+
+[tasks."check:spacing"]
+alias = "lint-spacing"
+description = "Check blank lines between Rust statement groups"
+run = "styling-lint check src tests xtask"
+
+[tasks."check:markdown"]
+alias = "lint-md"
+description = "Lint repository Markdown"
+run = "markdownlint-cli2"
+
+[tasks."check:workflows"]
+description = "Validate all GitHub Actions workflows"
+run = "actionlint"
+
+[tasks."check:hooks"]
+description = "Validate the pre-commit configuration"
+run = "pre-commit validate-config"
+
+[tasks."check:tasks"]
+description = "Validate the mise task graph and aliases"
+run = "mise tasks validate"
+
+[tasks."check:rust"]
+description = "Check all workspace targets, denying dead code (macOS)"
+run = "cargo check --locked --workspace --all-targets"
+
+[tasks."check:metal"]
+alias = "check-metal"
+description = "Check assembled Metal libraries and generated clangd configuration"
+wait_for = ["check:native"]
+run = "cargo xtask check-metal"
+
+[tasks."check:docs"]
+description = "Test the docs builder and build the combined book and Rust API"
+depends = ["test:docs", "docs"]
+
+# These additional diagnostics currently report existing findings.
+[tasks."check:clippy"]
+alias = "clippy"
+description = "Strict Clippy, including the experimental nesting limit"
+run = "cargo clippy --locked --workspace --all-targets -- -D warnings"
+
+[tasks."check:oxisym"]
+alias = "oxisym"
+description = "Run the additional Oxisym Rust diagnostics"
+run = "cargo dylint --git https://github.com/alfredr/oxisym --all -- --locked --workspace --all-targets"
+
+[tasks.test]
+description = "Run workspace tests serially; optional CHERENKOV_MODEL_DIR (macOS)"
+wait_for = ["check:rust"]
+run = "cargo test --locked --workspace --release -- --test-threads=1"
+
+[tasks."test:docs"]
+description = "Test the docs builder, README, and report automation"
+wait_for = ["check:native"]
+run = "cargo test --locked --package xtask --test docs --test readme --test automation"
+
+[tasks.coverage]
+description = "Run instrumented tests and write Rust coverage reports (macOS)"
+depends = ["test:coverage", "coverage:report"]
+
+# Invoke the pinned binary directly: ~/.cargo/bin may contain an older subcommand.
+[tasks."test:coverage"]
+description = "Run the workspace test suite with Rust coverage instrumentation"
+run = "{{ tools['cargo:cargo-llvm-cov'].path | quote }}/bin/cargo-llvm-cov llvm-cov --locked --workspace --all-targets --release --no-report -- --test-threads=1"
+
+[tasks."coverage:report"]
+description = "Generate reports from the latest instrumented test run"
+wait_for = ["test:coverage"]
+run = [
+  "mkdir -p target/coverage",
+  "{{ tools['cargo:cargo-llvm-cov'].path | quote }}/bin/cargo-llvm-cov llvm-cov report --workspace --release --ignore-filename-regex '(^|/)(tests|target)/' --lcov --output-path target/coverage/lcov.info",
+  "{{ tools['cargo:cargo-llvm-cov'].path | quote }}/bin/cargo-llvm-cov llvm-cov report --workspace --release --ignore-filename-regex '(^|/)(tests|target)/' --html --output-dir target/coverage",
+  "{{ tools['cargo:cargo-llvm-cov'].path | quote }}/bin/cargo-llvm-cov llvm-cov report --workspace --release --ignore-filename-regex '(^|/)(tests|target)/' > target/coverage/summary.txt",
+]
+
+# Fixes are explicit, separate from read-only checks and commit hooks.
+[tasks.fix]
+description = "Format Rust and fix statement spacing and Markdown"
+depends = ["fix:spacing", "fix:markdown"]
 
 [tasks.fmt]
 description = "Format Rust source"
 run = "cargo fmt --all"
 
-[tasks.fmt-check]
-description = "Check Rust formatting"
-run = "cargo fmt --all -- --check"
-
-[tasks.lint-spacing]
-description = "Check blank lines between Rust statement groups"
-depends = ["fmt-check"]
-run = "styling-lint check src tests xtask"
-
-[tasks.fix-spacing]
-description = "Format Rust and add blank lines between statement groups"
+[tasks."fix:spacing"]
+alias = "fix-spacing"
+description = "Format Rust and fix blank lines between statements"
 depends = ["fmt"]
 run = "styling-lint fix src tests xtask"
 
-[tasks.lint-md]
-description = "Lint repository Markdown"
-run = "markdownlint-cli2"
-
-[tasks.fix-md]
+[tasks."fix:markdown"]
+alias = "fix-md"
 description = "Apply Markdown lint fixes"
 run = "markdownlint-cli2 --fix"
 
-[tasks.clippy]
-description = "Run strict Clippy, including the experimental nesting limit"
-run = "cargo clippy --workspace --all-targets --offline -- -D warnings"
+[tasks.hooks]
+description = "Install pre-commit hooks; skip worktrees without the config"
+run = "pre-commit install --allow-missing-config"
 
-[tasks.oxisym]
-description = "Run the Oxisym Rust lints"
-run = "cargo dylint --git https://github.com/alfredr/oxisym --all -- --workspace --all-targets"
+[tasks.pre-commit]
+description = "Run all pre-commit checks (macOS)"
+run = "pre-commit run --all-files"
 
-[tasks.test]
-description = "Run Rust tests serially; set CHERENKOV_MODEL_DIR for model checks"
-run = "cargo test --workspace --release --offline -- --test-threads=1"
-
-[tasks.check-metal]
-description = "Syntax-check the assembled Metal libraries with the real compiler"
-run = "cargo xtask check-metal"
+[tasks.docs]
+description = "Build the guide and workspace Rust API in _site (macOS)"
+wait_for = ["test:docs", "check:metal"]
+run = "cargo xtask docs"
 
 [tasks.clangd]
-description = "Write kernels/.clangd so clangd sees each fragment as the assembler does"
+description = "Write kernels/.clangd for the Metal editor"
 run = "cargo xtask clangd"
 
 [tasks.bench]

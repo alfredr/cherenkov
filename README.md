@@ -213,14 +213,16 @@ The [documentation index](docs/README.md) maps the remaining guides and source.
 Install the tools with `mise install`, then run:
 
 ```sh
-mise run fix-spacing   # rustfmt and statement spacing
-mise run lint-spacing  # check both without changing files
-mise run lint-md       # check Markdown
-mise run fix-md        # fix Markdown formatting
+mise run hooks       # install pre-commit checks
+mise run check       # portable lints and Rust target/dead-code checks
+mise run check:full  # also run tests, Metal validation, and the site build
+mise run coverage    # instrumented tests and HTML/LCOV coverage reports
+mise run fix         # apply Rust, spacing, and Markdown fixes
 ```
 
-PRs check Rust formatting and spacing on Ubuntu and run tests on macOS.
-See [validation](docs/validation.md) for tests, Clippy, Oxisym, and Metal checks.
+PRs run the same check groups on Ubuntu and macOS and save coverage reports.
+See [validation](docs/validation.md) for the groups, platform requirements,
+individual checks, and additional Clippy and Oxisym diagnostics.
 
 ## License
 

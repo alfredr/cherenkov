@@ -1,0 +1,48 @@
+minimum_pre_commit_version: '4.6.2'
+default_stages: [pre-commit]
+
+repos:
+  - repo: local
+    hooks:
+      - id: rustfmt
+        name: Rust formatting
+        entry: mise run check:fmt
+        language: system
+        files: '(\.rs$|(^|/)Cargo\.toml$|(^|/)rustfmt\.toml$)'
+        pass_filenames: false
+      - id: rust-spacing
+        name: Rust statement spacing
+        entry: mise run check:spacing
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: markdownlint
+        name: Markdown lint
+        entry: mise run check:markdown
+        language: system
+        types: [markdown]
+        pass_filenames: false
+      - id: actionlint
+        name: GitHub Actions syntax
+        entry: mise run check:workflows
+        language: system
+        files: '^\.github/workflows/.*\.ya?ml$'
+        pass_filenames: false
+      - id: hook-config
+        name: Pre-commit configuration
+        entry: mise run check:hooks
+        language: system
+        files: '^\.pre-commit-config\.yaml$'
+        pass_filenames: false
+      - id: task-config
+        name: Mise task configuration
+        entry: mise run check:tasks
+        language: system
+        files: '^mise\.toml$'
+        pass_filenames: false
+      - id: cargo-check
+        name: Rust targets and dead code (macOS)
+        entry: mise run check:rust
+        language: system
+        files: '(\.rs$|(^|/)Cargo\.(toml|lock)$|^\.cargo/)'
+        pass_filenames: false
