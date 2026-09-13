@@ -57,20 +57,32 @@ definitions (`type` `function`, a name matching `[A-Za-z0-9_-]{1,64}`, and an
 object `parameters` schema); `strict: true` and non-object schemas are
 rejected. `tool_choice` accepts `auto` (default) and `none`; `required` and a
 specific-function choice are rejected because the checkpoint cannot be
-obligated to call a function. The checkpoint renders the tools block and
-emits calls as XML-style markup. The server parses that markup
-incrementally, holds back bytes that could belong to a terminal marker, and
-emits `tool_calls` with a `tool_calls` finish reason when calls are
-completed. When a tool call is produced, `content` is empty and the
-assistant message retains the structured calls for the next turn; `role`
-`tool` messages feed the tool response back into the conversation.
-A malformed tool-call region falls back to serving the model output
-verbatim as content. When a recovered call discards a truncated or
-suffixed tail or the parser keeps arguments that violate a declared
-parameter type, the server logs a one-line diagnostic. Retained sessions
-store the decoded argument objects; fresh requests send `arguments` as
-the JSON string. `parallel_tool_calls` is accepted only when it is
-`true` while tools are enabled or absent.
+obligated to call a function. `parallel_tool_calls` is accepted only when it
+is `true` while tools are enabled or absent.
+
+The checkpoint renders the tools block and emits calls as XML-style markup.
+The server parses that markup incrementally and holds back bytes that could
+belong to a terminal marker. Text before the calls is preserved as `content`,
+with separator whitespace immediately before the marker removed. Parsed call
+markup is excluded from content in streaming responses, JSON responses, and
+retained session history. A call-only assistant message has `content: null`
+in JSON responses and session history; its stream contains no nonempty
+content delta. Streaming returns the calls together in an indexed
+`tool_calls` delta before the final finish-reason chunk.
+
+Calls receive `finish_reason: "tool_calls"` when the model stops naturally.
+A token-budget cutoff keeps `finish_reason: "length"`, even if calls were
+recovered. Recovery can retain a call whose name and parameters are complete
+but closing tags are missing, or keep earlier calls and discard a malformed
+or explanatory suffix. If the region cannot be recovered, its bytes are
+returned verbatim as content, including in streaming responses. Discarded
+suffixes and arguments that violate a declared parameter type produce a
+one-line diagnostic.
+
+The client executes the calls and sends `role: "tool"` messages with the
+results. Retained sessions keep structured calls for the next turn without
+duplicating their markup in content. Session history stores decoded argument
+objects; API responses and fresh requests carry `arguments` as a JSON string.
 
 ### Chat template
 

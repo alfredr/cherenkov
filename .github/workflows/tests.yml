@@ -43,6 +43,11 @@ jobs:
         uses: jdx/mise-action@v4
         with:
           install_args: rust
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2.9.2
+        with:
+          key: tests-${{ matrix.os }}-release
+          cache-bin: false
       - name: Show GPU information
         run: system_profiler SPDisplaysDataType
       - name: Check Rust targets and run unit tests
@@ -61,6 +66,12 @@ jobs:
         uses: jdx/mise-action@v4
         with:
           install_args: rust cargo:cargo-llvm-cov
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2.9.2
+        with:
+          # Keep instrumented dependencies separate from ordinary test builds.
+          key: coverage-macos-26
+          cache-bin: false
       - name: Run instrumented tests and generate reports
         run: mise run coverage
       - name: Add coverage to the job summary

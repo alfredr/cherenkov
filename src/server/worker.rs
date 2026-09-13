@@ -48,13 +48,47 @@ struct Active<'a> {
     session: Option<Turn>,
     output: Output,
     text_decoder: Box<dyn FnMut(u32) -> Result<Option<String>> + 'a>,
-    tool_decoder: Option<ToolCallOutputDecoder>,
-    text: String,
+    text: GeneratedText,
     usage: UsageStats,
     config_generation: u64,
     response_bytes: usize,
     /// Tokens and elapsed seconds from the last step, if eligible for pacing.
     last_chunk: Option<(usize, f64)>,
+}
+
+/// Raw decoded bytes are used for reconciliation and limits. Only parsed
+/// content is published to clients and retained in session history.
+#[derive(Default)]
+struct GeneratedText {
+    raw: String,
+    content: String,
+    tool_decoder: Option<ToolCallOutputDecoder>,
+}
+
+impl GeneratedText {
+    fn feed(&mut self, delta: &str, output: &Output, limit: usize) -> Result<()> {
+        ensure!(
+            self.raw.len() + delta.len() <= limit,
+            "response exceeds response_bytes"
+        );
+        self.raw.push_str(delta);
+
+        let visible = match self.tool_decoder.as_mut() {
+            Some(decoder) => decoder.feed(delta),
+            None => delta.to_owned(),
+        };
+
+        self.publish(visible, output)
+    }
+
+    fn publish(&mut self, text: String, output: &Output) -> Result<()> {
+        if !text.is_empty() {
+            self.content.push_str(&text);
+            output.send(Frame::Text(text))?;
+        }
+
+        Ok(())
+    }
 }
 
 pub(super) struct Worker<'a> {
@@ -250,8 +284,10 @@ impl<'a> Worker<'a> {
                         .step(token)
                         .map_err(|e| anyhow::anyhow!("decode: {e}"))
                 }),
-                tool_decoder,
-                text: String::new(),
+                text: GeneratedText {
+                    tool_decoder,
+                    ..Default::default()
+                },
                 usage: UsageStats::default(),
                 config_generation: pending.job.settings.generation,
                 response_bytes: limits.response_bytes,
@@ -496,21 +532,7 @@ impl Active<'_> {
             ensure!(!self.ticket.cancelled(), "request cancelled");
 
             if let Some(delta) = (self.text_decoder)(token)? {
-                // While tools are active, the decoder holds back bytes that
-                // could belong to a terminal tool-call suffix.
-                let visible = match self.tool_decoder.as_mut() {
-                    Some(decoder) => decoder.feed(&delta),
-                    None => delta,
-                };
-
-                if !visible.is_empty() {
-                    ensure!(
-                        self.text.len() + visible.len() <= self.response_bytes,
-                        "response exceeds response_bytes"
-                    );
-                    self.text.push_str(&visible);
-                    self.output.send(Frame::Text(visible))?;
-                }
+                self.text.feed(&delta, &self.output, self.response_bytes)?;
             }
 
             state.token();
@@ -547,7 +569,19 @@ impl Active<'_> {
             "response exceeds response_bytes"
         );
 
-        let terminal = self.tool_decoder.take().map(|decoder| decoder.finish());
+        // Reconcile against raw bytes before closing the parser: the token
+        // stream may have withheld a final Unicode fragment or marker suffix.
+        let tail = full
+            .strip_prefix(&self.text.raw)
+            .ok_or_else(|| anyhow::anyhow!("final decoded text differs from streamed output"))?;
+
+        self.text.feed(tail, &self.output, self.response_bytes)?;
+
+        let terminal = self
+            .text
+            .tool_decoder
+            .take()
+            .map(|decoder| decoder.finish());
 
         let tool_calls: Option<Vec<WireToolCall>> = terminal
             .as_ref()
@@ -585,24 +619,10 @@ impl Active<'_> {
             }
         }
 
-        // Held-back bytes (trailing whitespace, a failed marker region) belong
-        // to the ordinary text: publish them as a text frame before counting
-        // them, so a streaming client never loses held response bytes.
+        // Fallback bytes and trailing whitespace take the same publication
+        // path as incremental content, including for streaming clients.
         if let Some(terminal) = &terminal {
-            if !terminal.content.is_empty() {
-                self.output.send(Frame::Text(terminal.content.clone()))?;
-            }
-
-            self.text.push_str(&terminal.content);
-        }
-
-        if tool_calls.is_none() {
-            if let Some(tail) = full
-                .strip_prefix(&self.text)
-                .filter(|tail| !tail.is_empty())
-            {
-                self.output.send(Frame::Text(tail.to_owned()))?;
-            }
+            self.text.publish(terminal.content.clone(), &self.output)?;
         }
 
         let (reason, rng) = match &self.phase {
@@ -628,12 +648,12 @@ impl Active<'_> {
         } else {
             self.session
                 .take()
-                .map(|t| t.prepare(&full, rng, self.usage, tool_calls.as_deref()))
+                .map(|t| t.prepare(&self.text.content, rng, self.usage, tool_calls.as_deref()))
                 .transpose()?
         };
 
         self.output.send(Frame::Finish {
-            text: full,
+            text: std::mem::take(&mut self.text.content),
             reason,
             usage,
             turn: turn.map(Box::new),
@@ -641,3 +661,7 @@ impl Active<'_> {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/server/worker.rs"]
+mod tests;

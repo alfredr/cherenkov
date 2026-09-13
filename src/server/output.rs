@@ -75,6 +75,13 @@ impl Output {
         Self { sender, ticket }
     }
 
+    #[cfg(test)]
+    pub(super) fn for_test(ticket: Arc<Ticket>) -> (Self, mpsc::Receiver<Frame>) {
+        let (sender, receiver) = mpsc::sync_channel(16);
+
+        (Self { sender, ticket }, receiver)
+    }
+
     pub(super) fn send(&self, frame: Frame) -> Result<()> {
         if self.sender.try_send(frame).is_err() {
             self.ticket.cancel();
@@ -85,7 +92,7 @@ impl Output {
     }
 }
 
-fn write_frames(
+pub(super) fn write_frames(
     response: &mut Response<'_, impl std::io::Write>,
     receiver: mpsc::Receiver<Frame>,
     ticket: &Ticket,
