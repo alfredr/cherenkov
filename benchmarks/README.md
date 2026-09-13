@@ -10,12 +10,42 @@ cargo xtask bench /path/to/model --build-stores
 cargo xtask bench /path/to/model --cases code,prose --rounds 1
 cargo xtask bench /path/to/model --output results/comparison
 cargo xtask bench /path/to/model --output results/comparison --resume
+cargo xtask bench /path/to/model --mode light --note "M5 Pro 48 GB, idle"
+cargo xtask bench /path/to/model --mode heavy --build-stores --note "M5 Pro 48 GB, idle"
 ```
 
 The runner builds offline unless given `--binary`. `--build-stores` permits
 missing low-bit stores to be built during load. Otherwise missing stores are
 an error. Allow an extra 39 GB for Q2 and 54 GB for Q3. Loading and conversion
 are excluded from prefill and decode timings.
+
+## Sharing a run
+
+Two presets exist for sending a run to someone else. `--mode light` runs one
+round of the code, prose, and long-prefill cases on whichever expert stores
+are already built, about ten samples, and takes a few minutes. `--mode heavy`
+runs the whole suite including pelicans, which takes hours and needs every
+store or `--build-stores`. Both zip the finished results directory beside
+itself (`--archive` does the same for any run), so one file holds
+`report.json`, `summary.md`, the gallery, every answer, and the pelicans.
+Attach it to a pull request or issue. Explicit `--configs`, `--cases`, and
+`--rounds` override a preset's choices.
+
+Each report records the machine in `provenance.hardware_detail`: kernel,
+memory, CPU thread count, and the capacity and free space of the volume
+holding the model, all read through libc; on macOS also the chip, GPU core
+count, OS version, and NVMe model and capacity from `system_profiler`; and a
+two-gigabyte uncached read sample of the expert store in GB/s taken before
+the first sample. Automatic machine metadata excludes serial numbers,
+device identifiers, the hostname, and home-directory paths. The runner's
+binary and model arguments appear as `<binary>` and `<model>`. Custom suite
+prompts and configuration arguments, generated answers, and `--note` text
+are preserved verbatim. `--note` records conditions such as power or other load.
+`settings` records the context capacity and cap overrides; the suite path
+appears as `<suite>` and its content hash is recorded in the signature.
+The server TOML is never read, and the pool is adaptive unless a
+configuration passes `--pool-gb`. The summary's first line repeats the
+hardware facts so runs from different machines can sit side by side.
 
 ## Suite
 
@@ -44,8 +74,15 @@ caching, or developer overrides. Power is checked
 at process boundaries and every 30 seconds. A power-source change invalidates the
 sample; shorter transitions may be missed.
 
-Reported GPU memory above 25 decimal GB invalidates a sample. Memory is read
-after prefill scratch is released. `gpu_span_ms` is the interval between the
+The engine sizes its expert pool from Metal's recommended working set after
+fixed buffers and reservations, and fits prefill chunks to available memory.
+The suite keeps prompts, answer caps, and context capacities fixed for
+comparison across machines. Custom suites can change those workloads;
+`--case-cap` changes answer caps and `--mode light` reduces the sample count.
+
+Reported GPU memory above the target machine's physical memory invalidates
+a sample. Memory is read after prefill scratch is released.
+`gpu_span_ms` is the interval between the
 command buffer's GPU start and end timestamps, including gaps. `io_wait_ms`
 measures host servicing of expert reads. The intervals overlap and must not
 be added together. Neither measures GPU utilization.
@@ -69,8 +106,11 @@ Results default to `results/<UTC timestamp>/` and are written after each sample.
 New runs are ignored by Git. Use `git add -f results/<name>` to retain one.
 SVG rates are reported separately; malformed or incomplete SVGs are invalid.
 
-`--resume` requires matching binaries, model, suite, and selections. It skips
-successful and content-invalid samples. Engine errors, memory-limit failures,
+`--resume` requires matching binaries, model, suite, and selections. A hash
+of the canonical model path preserves directory identity without recording
+the path itself. Older reports containing that path are migrated on resume;
+reports containing only `<model>` without a directory hash require a new run.
+It skips successful and content-invalid samples. Engine errors, memory-limit failures,
 and power changes stop the suite and are retried on resume.
 
 To retry capped answers, raise their caps with, for example,

@@ -118,6 +118,60 @@ fn config_label(config: &Value) -> &str {
     }
 }
 
+/// One line of machine facts for reports that carry `hardware_detail`.
+pub fn hardware_line(provenance: &Value) -> Option<String> {
+    let detail = provenance.get("hardware_detail")?;
+    let profile = &detail["profile"];
+    let mut parts = Vec::new();
+
+    if !profile["chip"].is_null() {
+        parts.push(match profile["gpu_cores"].as_str() {
+            Some(cores) => format!("{} with a {cores}-core GPU", text(&profile["chip"])),
+            None => text(&profile["chip"]).to_owned(),
+        });
+    }
+
+    if let Some(bytes) = detail["memory_bytes"].as_u64() {
+        parts.push(format!("{} GiB memory", bytes >> 30));
+    } else if !profile["memory"].is_null() {
+        parts.push(format!("{} memory", text(&profile["memory"])));
+    }
+
+    if let Some(drive) = profile["nvme"].as_array().and_then(|d| d.first()) {
+        parts.push(format!(
+            "{} {}",
+            text(&drive["model"]),
+            text(&drive["size"])
+        ));
+    }
+
+    if let Some(gbps) = detail["store_read"]["gbps"].as_f64() {
+        parts.push(format!("expert store reads at {gbps:.1} GB/s"));
+    }
+
+    if let Some(version) = detail["os_version"].as_str() {
+        parts.push(
+            if detail["kernel"]
+                .as_str()
+                .is_some_and(|k| k.starts_with("Darwin"))
+            {
+                format!("macOS {version}")
+            } else {
+                version.to_owned()
+            },
+        );
+    } else if let Some(kernel) = detail["kernel"].as_str() {
+        parts.push(kernel.to_owned());
+    }
+
+    let note = provenance["note"]
+        .as_str()
+        .map(|n| format!(" Note: {n}"))
+        .unwrap_or_default();
+
+    (!parts.is_empty()).then(|| format!("Hardware: {}.{note}", parts.join(", ")))
+}
+
 pub fn write(out: &Path, report: &Value) -> Result<()> {
     util::write_json(&out.join("report.json"), report)?;
 
@@ -127,9 +181,16 @@ pub fn write(out: &Path, report: &Value) -> Result<()> {
 pub fn regenerate(out: &Path, report: &Value) -> Result<()> {
     let rows = rows(report)?;
     let mut summary = format!(
-        "# Cherenkov benchmark\n\nSource commit: `{}`\n\n| Case | Configuration | Runs | Output tokens | Decode s | Load s | pp/s | tg/s | Metal GB |\n| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n",
+        "# Cherenkov benchmark\n\nSource commit: `{}`\n\n",
         text(&report["provenance"]["commit"])
     );
+
+    if let Some(line) = hardware_line(&report["provenance"]) {
+        summary.push_str(&line);
+        summary.push_str("\n\n");
+    }
+
+    summary.push_str("| Case | Configuration | Runs | Output tokens | Decode s | Load s | pp/s | tg/s | Metal GB |\n| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
 
     for row in &rows {
         writeln!(
