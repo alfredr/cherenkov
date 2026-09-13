@@ -44,7 +44,7 @@ impl<'a> QLinear<'a> {
     }
 
     /// y = W x (f32 accumulate), parallel over output rows.
-    /// Grouped form: y[r] = sum_g scale[r,g] * dot(q[r,g], x_g) + bias[r,g] * sum(x_g).
+    /// Grouped form: `y[r] = sum_g scale[r,g] * dot(q[r,g], x_g) + bias[r,g] * sum(x_g)`.
     pub fn matvec(&self, x: &[f32], y: &mut [f32]) {
         assert_eq!(x.len(), self.in_dim);
         assert_eq!(y.len(), self.out_dim);

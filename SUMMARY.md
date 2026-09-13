@@ -3,6 +3,7 @@
 [Cherenkov](README.md)
 
 - [Documentation](docs/README.md)
+  - [Rust API](docs/rust-api.md)
   - [Running](docs/running.md)
   - [Server configuration](docs/server-config.md)
   - [Statistics](docs/stats.md)

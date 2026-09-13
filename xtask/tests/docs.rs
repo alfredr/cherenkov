@@ -142,3 +142,65 @@ fn attributes_select_files_without_changing_relative_paths() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn publishes_complete_rustdoc_tree_and_removes_stale_api_files() -> Result<()> {
+    let rustdoc = tempfile::tempdir()?;
+    let site = tempfile::tempdir()?;
+    let files = [
+        ("crates.js", "crate index"),
+        ("cherenkov/index.html", "engine"),
+        ("xtask/index.html", "automation"),
+        ("static.files/main-hash.js", "script"),
+        ("search.index/name/chunk.js", "search shard"),
+        ("src/cherenkov/metal.rs.html", "source"),
+        ("trait.impl/core/clone/trait.Clone.js", "implementations"),
+    ];
+
+    write_files(rustdoc.path(), &files)?;
+    write_files(
+        site.path(),
+        &[
+            ("index.html", "book"),
+            ("docs/rust-api.html", "reference chapter"),
+            ("api/removed_crate/index.html", "stale"),
+        ],
+    )?;
+    docs::publish_api(rustdoc.path(), site.path())?;
+
+    for (name, content) in files {
+        assert_eq!(
+            fs::read_to_string(site.path().join("api").join(name))?,
+            content
+        );
+    }
+
+    assert!(!site.path().join("api/removed_crate").exists());
+    assert_eq!(fs::read_to_string(site.path().join("index.html"))?, "book");
+    assert_eq!(
+        fs::read_to_string(site.path().join("docs/rust-api.html"))?,
+        "reference chapter"
+    );
+    assert!(
+        fs::read_to_string(site.path().join("api/index.html"))?
+            .contains("href=\"../docs/rust-api.html\"")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn missing_rustdoc_output_preserves_existing_api() -> Result<()> {
+    let rustdoc = tempfile::tempdir()?;
+    let site = tempfile::tempdir()?;
+
+    write_files(site.path(), &[("api/index.html", "previous build")])?;
+
+    assert!(docs::publish_api(rustdoc.path(), site.path()).is_err());
+    assert_eq!(
+        fs::read_to_string(site.path().join("api/index.html"))?,
+        "previous build"
+    );
+
+    Ok(())
+}

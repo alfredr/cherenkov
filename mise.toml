@@ -6,7 +6,7 @@ node = "22.22.0"
 "github:rust-lang/mdBook" = "0.5.4"
 
 [tasks.docs]
-description = "Build the documentation and galleries in _site"
+description = "Build the guide and workspace Rust API in _site (macOS)"
 run = "cargo xtask docs"
 
 [tasks.fmt]

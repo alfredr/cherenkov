@@ -3,8 +3,8 @@
 //!
 //!   dense.bin    every tensor that is not an expert matrix, an n-gram
 //!                shard, or vision (64-byte aligned, name order)
-//!   experts.bin  [layer][expert] records (see `ExpertLayout`)
-//!   ngram.bin    [row] records of weight | scales | biases
+//!   experts.bin  `[layer][expert]` records (see `ExpertLayout`)
+//!   ngram.bin    `[row]` records of weight | scales | biases
 //!   manifest.json
 
 use super::{DenseEntry, ExpertLayout, Manifest, NgramLayout, PAGE};
