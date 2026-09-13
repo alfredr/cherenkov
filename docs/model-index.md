@@ -66,8 +66,9 @@ that ignore range requests are rejected. Remote GGUF registration is not support
 
 Inspection reads up to eight shard headers concurrently. Color terminals show a
 spinner during metadata resolution and a header progress bar with an estimated
-remaining time. Redirected stderr, `NO_COLOR`, and terminals without color use
-plain text updates. Progress stays on stderr, including with `--json`; stdout
+remaining time, using the same Ratatui theme as reports and the dashboard.
+Redirected stderr, `NO_COLOR`, and terminals without color use plain text updates.
+Progress stays on stderr, including with `--json`; stdout
 holds the result. Shard names come from the weight map or repository listing.
 
 Credentials come from `--hf-token`, `HF_TOKEN`, or the HF token file. The index

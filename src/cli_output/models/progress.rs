@@ -1,112 +1,121 @@
-//! Inspection progress on stderr; redirected output retains line-based updates.
+//! Ratatui inspection progress on stderr, with a plain text fallback.
 
+mod view;
+
+use anyhow::{Context, Result};
 use cherenkov::model::index::ModelEvent;
-use indicatif::{HumanDuration, ProgressBar, ProgressState, ProgressStyle};
 use std::{
-    fmt::Write,
-    io::{self, IsTerminal},
-    time::Duration,
+    io::{self, IsTerminal, Write},
+    sync::mpsc::{self, RecvTimeoutError},
+    time::{Duration, Instant},
 };
+use view::{Progress, StatusLine};
 
-const SPINNER: &str = "{spinner:.cyan} {wide_msg} [{elapsed_precise}]";
-const HEADERS: &str = "{spinner:.cyan} headers {pos}/{len} [{wide_bar:.cyan/dim}] ETA {estimate}";
+const TICK: Duration = Duration::from_millis(100);
 
-/// Own the display for one operation, clearing it on success or failure.
-/// Cached lookups emit no events, so they never create a spinner.
-pub(crate) struct InspectionProgress {
-    animated: bool,
-    bar: Option<ProgressBar>,
-}
+/// Keep terminal rendering on the caller while remote inspection can block.
+/// The scoped worker finishes before the display is cleared and results print.
+pub(crate) fn inspect_with_progress<T: Send>(
+    operation: impl FnOnce(&mut dyn FnMut(ModelEvent)) -> Result<T> + Send,
+) -> Result<T> {
+    let stderr = io::stderr();
 
-impl InspectionProgress {
-    pub(crate) fn new() -> Self {
-        let stderr = io::stderr();
-
-        Self {
-            animated: stderr.is_terminal()
-                && anstream::AutoStream::choice(&stderr) != anstream::ColorChoice::Never,
-            bar: None,
-        }
+    if !stderr.is_terminal()
+        || anstream::AutoStream::choice(&stderr) == anstream::ColorChoice::Never
+    {
+        return operation(&mut |event| plain(&event));
     }
 
-    pub(crate) fn update(&mut self, event: ModelEvent) {
-        if !self.animated {
-            plain(event);
+    let mut line = StatusLine::default();
 
-            return;
-        }
+    drive(operation, |progress| line.draw(progress))
+}
 
-        let bar = self.bar.get_or_insert_with(|| {
-            let bar = ProgressBar::new_spinner();
+fn drive<T: Send>(
+    operation: impl FnOnce(&mut dyn FnMut(ModelEvent)) -> Result<T> + Send,
+    mut draw: impl FnMut(&Progress) -> io::Result<()>,
+) -> Result<T> {
+    std::thread::scope(|scope| {
+        // Bounded independently of HTTP concurrency. The UI drains events even
+        // after a draw failure, so a display error cannot strand the worker.
+        let (sender, receiver) = mpsc::sync_channel(16);
+        let worker = std::thread::Builder::new()
+            .name("model-inspect".into())
+            .spawn_scoped(scope, move || {
+                operation(&mut |event| {
+                    let _ = sender.send(event);
+                })
+            })
+            .context("starting inspection worker")?;
 
-            bar.set_style(style(SPINNER));
-            bar.enable_steady_tick(Duration::from_millis(100));
+        render_events(receiver, &mut draw);
 
-            bar
-        });
+        worker
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
 
-        match event {
-            ModelEvent::Resolving { source } => {
-                bar.set_message(format!("Resolving {source}"));
-            }
-            ModelEvent::Headers {
-                completed, total, ..
-            } => {
-                if completed == 0 {
-                    bar.reset();
-                    bar.set_style(style(HEADERS));
+fn render_events(
+    receiver: mpsc::Receiver<ModelEvent>,
+    draw: &mut impl FnMut(&Progress) -> io::Result<()>,
+) {
+    let mut progress: Option<Progress> = None;
+    let mut animated = true;
+    let mut next_draw = Instant::now();
+
+    loop {
+        match receiver.recv_timeout(next_draw.saturating_duration_since(Instant::now())) {
+            Ok(event) => {
+                if !animated {
+                    plain(&event);
+
+                    continue;
                 }
 
-                bar.set_length(total as u64);
-                bar.set_position(completed as u64);
+                match &mut progress {
+                    Some(progress) => progress.update(event),
+                    None => progress = Some(Progress::new(event)),
+                }
             }
-            ModelEvent::ReadingMetadata => {
-                bar.set_style(style(SPINNER));
-                bar.set_message("Reading model metadata");
-                bar.unset_length();
-                bar.reset_elapsed();
-            }
-            _ => {}
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
         }
+
+        if Instant::now() < next_draw {
+            continue;
+        }
+
+        if animated
+            && let Some(progress) = &progress
+            && draw(progress).is_err()
+        {
+            animated = false;
+
+            plain(&progress.event);
+        }
+
+        next_draw = Instant::now() + TICK;
     }
 }
 
-impl Drop for InspectionProgress {
-    fn drop(&mut self) {
-        if let Some(bar) = &self.bar {
-            bar.finish_and_clear();
-        }
-    }
-}
-
-fn style(template: &str) -> ProgressStyle {
-    ProgressStyle::with_template(template)
-        .expect("valid inspection progress template")
-        .tick_strings(&["-", "\\", "|", "/", " "])
-        .progress_chars("=>-")
-        .with_key("estimate", |state: &ProgressState, out: &mut dyn Write| {
-            if state.pos() == 0 {
-                let _ = out.write_str("--");
-
-                return;
-            }
-
-            let _ = write!(out, "{}", HumanDuration(state.eta()));
-        })
-}
-
-fn plain(event: ModelEvent) {
-    match event {
-        ModelEvent::Resolving { source } => eprintln!("inspect {source}: resolving metadata"),
+fn plain(event: &ModelEvent) {
+    let message = match event {
+        ModelEvent::Resolving { source } => format!("inspect {source}: resolving metadata"),
         ModelEvent::Headers {
             completed,
             total,
             file: Some(file),
-        } => eprintln!("inspect: headers {completed}/{total} ({file})"),
-        ModelEvent::Headers { total, .. } => eprintln!("inspect: reading {total} shard headers"),
-        ModelEvent::ReadingMetadata => eprintln!("inspect: reading model metadata"),
-        _ => {}
-    }
+        } => {
+            format!("inspect: headers {completed}/{total} ({file})")
+        }
+        ModelEvent::Headers { total, .. } => format!("inspect: reading {total} shard headers"),
+        ModelEvent::ReadingMetadata => "inspect: reading model metadata".into(),
+        _ => return,
+    };
+
+    // Progress is optional; a closed stderr must not change the operation result.
+    let _ = writeln!(io::stderr().lock(), "{message}");
 }
 
 #[cfg(test)]

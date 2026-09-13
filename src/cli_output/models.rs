@@ -8,7 +8,7 @@ use serde::Serialize;
 use std::io::IsTerminal;
 
 mod progress;
-pub(crate) use progress::InspectionProgress;
+pub(crate) use progress::inspect_with_progress;
 
 pub(crate) fn list(models: &[ModelSummary], json: bool) -> Result<()> {
     let rows = models

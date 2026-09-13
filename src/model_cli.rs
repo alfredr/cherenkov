@@ -113,16 +113,24 @@ pub(crate) fn inspect(paths: Paths, input: &Path, json: bool) -> Result<()> {
 
 /// CLI commands render inspection events on stderr, leaving result output intact.
 fn select(index: &ModelIndex, input: &Path, options: ResolveOptions<'_>) -> Result<ModelDetails> {
-    let mut progress = crate::cli_output::models::InspectionProgress::new();
-    let mut events = |event| progress.update(event);
+    let ResolveOptions {
+        name,
+        revision,
+        token,
+        ..
+    } = options;
 
-    index.select(
-        input,
-        ResolveOptions {
-            events: Some(&mut events),
-            ..options
-        },
-    )
+    crate::cli_output::models::inspect_with_progress(|events| {
+        index.select(
+            input,
+            ResolveOptions {
+                name,
+                revision,
+                token,
+                events: Some(events),
+            },
+        )
+    })
 }
 
 /// Registration and availability controls for externally owned disk stores.

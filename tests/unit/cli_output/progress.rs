@@ -1,54 +1,76 @@
 use super::*;
+use std::sync::mpsc;
 
 #[test]
-fn header_completion_keeps_the_display_live_until_metadata_finishes() {
-    let bar = ProgressBar::hidden();
-    let mut progress = InspectionProgress {
-        animated: true,
-        bar: Some(bar.clone()),
-    };
+fn a_cached_lookup_never_draws() {
+    let result = drive(|_| Ok(7), |_| panic!("cached lookup drew progress")).unwrap();
 
-    progress.update(ModelEvent::Headers {
-        completed: 0,
-        total: 2,
-        file: None,
-    });
-    progress.update(ModelEvent::Headers {
-        completed: 2,
-        total: 2,
-        file: Some("weights.safetensors".into()),
-    });
-
-    assert_eq!(bar.position(), 2);
-    assert_eq!(bar.length(), Some(2));
-    assert!(!bar.is_finished());
-
-    progress.update(ModelEvent::ReadingMetadata);
-
-    assert_eq!(bar.length(), None);
-    assert!(!bar.is_finished());
-
-    drop(progress);
-
-    assert!(bar.is_finished());
+    assert_eq!(result, 7);
 }
 
 #[test]
-fn returning_an_error_finishes_the_display() {
-    let bar = ProgressBar::hidden();
-    let operation = || -> anyhow::Result<()> {
-        let mut progress = InspectionProgress {
-            animated: true,
-            bar: Some(bar.clone()),
-        };
+fn rendering_ticks_while_inspection_waits_and_preserves_the_error() {
+    let caller = std::thread::current().id();
+    let (sender, receiver) = mpsc::channel();
+    let mut frames = 0;
+    let result: Result<()> = drive(
+        move |events| {
+            events(ModelEvent::Resolving {
+                source: "hf://example/model".into(),
+            });
+            receiver.recv_timeout(Duration::from_secs(2)).unwrap();
 
-        progress.update(ModelEvent::Resolving {
-            source: "hf://example/model".into(),
-        });
+            anyhow::bail!("metadata failed")
+        },
+        |_| {
+            assert_eq!(std::thread::current().id(), caller);
 
-        anyhow::bail!("metadata request failed")
-    };
+            frames += 1;
 
-    assert!(operation().is_err());
-    assert!(bar.is_finished());
+            if frames == 2 {
+                sender.send(()).unwrap();
+            }
+
+            Ok(())
+        },
+    );
+
+    assert!(frames >= 2);
+    assert_eq!(result.unwrap_err().to_string(), "metadata failed");
+}
+
+#[test]
+fn display_failure_drains_events_and_returns_the_operation_result() {
+    let (sender, receiver) = mpsc::channel();
+    let mut frames = 0;
+    let result = drive(
+        move |events| {
+            events(ModelEvent::Resolving {
+                source: "hf://example/model".into(),
+            });
+            receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+
+            // More events than the queue can hold: the fallback must keep draining.
+            for completed in 0..64 {
+                events(ModelEvent::Headers {
+                    completed,
+                    total: 64,
+                    file: None,
+                });
+            }
+
+            Ok(7)
+        },
+        |_| {
+            frames += 1;
+
+            sender.send(()).unwrap();
+
+            Err(io::Error::other("terminal failed"))
+        },
+    )
+    .unwrap();
+
+    assert_eq!(frames, 1);
+    assert_eq!(result, 7);
 }
