@@ -47,6 +47,8 @@ jobs:
         run: system_profiler SPDisplaysDataType
       - name: Check Rust targets and run unit tests
         run: mise run check:native
+      - name: Check Metal syntax and clangd configuration
+        run: mise run check:metal
 
   coverage:
     name: Rust coverage

@@ -48,8 +48,9 @@ cargo install --locked cargo-dylint dylint-link
 | `mise run clangd` | Regenerate Metal editor configuration |
 
 Review automatic spacing changes: the rules group syntax, not meaning.
-Existing task names such as `fmt-check`, `lint-spacing`, `lint-md`, `check-metal`,
+Existing task names such as `fmt-check`, `lint-md`, `check-metal`,
 `clippy`, `oxisym`, `fix-spacing`, and `fix-md` remain aliases.
+The compatibility command `lint-spacing` runs `check:fmt` before `check:spacing`.
 
 ## Tests
 
@@ -58,8 +59,8 @@ Automation tests are in `xtask/tests/`.
 
 Pull requests run portable pre-commit checks on Ubuntu and
 check all workspace targets and run the test suite on macOS 15 and 26.
-The macOS jobs include synthetic Metal tests; real-weight checks need a local
-model.
+The macOS jobs include synthetic Metal tests, then explicitly check Metal syntax
+and the generated clangd configuration. Real-weight checks need a local model.
 
 Read the contribution terms in [AUTHORS](../AUTHORS), then acknowledge them
 by adding your own entry as `Name <git-email> (@github-login)`. You can do this
@@ -117,7 +118,8 @@ Rust targets with dead code denied. Checks run when matching files are staged;
 they report failures without modifying files. Rust checks require macOS.
 
 Run `mise run pre-commit` to check all tracked files before opening a PR. The
-Ubuntu CI job runs the portable group; the macOS jobs run the native group.
+Ubuntu CI job runs the portable group; the macOS jobs run the native group
+followed by `check:metal`.
 Coverage and the test suite run separately from the commit hook.
 
 Linked Git worktrees share the installed hook. Installation allows a missing
