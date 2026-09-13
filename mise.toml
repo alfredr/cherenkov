@@ -6,6 +6,7 @@ node = "22.22.0"
 "github:rust-lang/mdBook" = "0.5.4"
 "cargo:cargo-llvm-cov" = "0.9.1"
 "github:rhysd/actionlint" = "1.7.12"
+shellcheck = "0.11.0"
 pre-commit = "4.6.2"
 
 [settings]

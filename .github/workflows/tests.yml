@@ -24,7 +24,7 @@ jobs:
       - name: Install Rust and linters
         uses: jdx/mise-action@v4
         with:
-          install_args: rust node npm:markdownlint-cli2 cargo:styling-lint github:rhysd/actionlint pre-commit
+          install_args: rust node npm:markdownlint-cli2 cargo:styling-lint github:rhysd/actionlint shellcheck pre-commit
       - name: Run portable checks
         run: mise run check:portable
 
@@ -63,11 +63,13 @@ jobs:
         run: mise run coverage
       - name: Add coverage to the job summary
         run: |
-          echo '## Rust test coverage' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Rust source only; excludes test code and Metal shaders. Model-dependent tests skip without weights; unexecuted Rust paths remain in the totals.' >> "$GITHUB_STEP_SUMMARY"
-          echo '```text' >> "$GITHUB_STEP_SUMMARY"
-          cat target/coverage/summary.txt >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo '## Rust test coverage'
+            echo 'Rust source only; excludes test code and Metal shaders. Model-dependent tests skip without weights; unexecuted Rust paths remain in the totals.'
+            echo '```text'
+            cat target/coverage/summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload coverage reports
         uses: actions/upload-artifact@v7
         with:
