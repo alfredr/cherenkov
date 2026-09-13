@@ -24,7 +24,7 @@ enum Task {
     Summarize { directory: PathBuf },
     /// Rebuild the README benchmark section from a completed saved run.
     Readme { directory: PathBuf },
-    /// Build the documentation and galleries with mdBook.
+    /// Build the mdBook guide and workspace Rust API reference.
     Docs,
     /// Syntax-check all assembled Metal libraries.
     CheckMetal,

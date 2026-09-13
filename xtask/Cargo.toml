@@ -16,5 +16,8 @@ serde_json = "1"
 sha2 = "0.11"
 tempfile = "3"
 
+[lints.rust]
+dead_code = "deny"
+
 [lints.clippy]
 cognitive_complexity = "warn"

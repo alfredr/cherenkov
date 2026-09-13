@@ -13,6 +13,9 @@ license = "MIT"
 repository = "https://github.com/alfredr/cherenkov"
 exclude = ["results/**", "benchmarks/**", "xtask/**", ".vscode/**"]
 
+[lints.rust]
+dead_code = "deny"
+
 [lints.clippy]
 cognitive_complexity = "warn"
 excessive_nesting = "warn"
