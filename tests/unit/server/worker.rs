@@ -166,19 +166,28 @@ fn complete(
     reason: &'static str,
     streaming: bool,
 ) -> (Value, String) {
-    let Fixture {
-        mut active,
-        tok,
-        receiver,
-        store,
-        session_id,
-    } = fixture(raw, tools, reason);
-    let ticket = active.ticket.clone();
+    let mut fixture = fixture(raw, tools, reason);
+    let active = &mut fixture.active;
 
     active
         .text
         .feed(&raw[..split], &active.output, active.response_bytes)
         .unwrap();
+
+    finish_fixture(fixture, streaming)
+}
+
+fn finish_fixture(fixture: Fixture, streaming: bool) -> (Value, String) {
+    let Fixture {
+        active,
+        tok,
+        receiver,
+        store,
+        session_id,
+    } = fixture;
+    let ticket = active.ticket.clone();
+    let generated_tokens = active.usage.generated_tokens;
+
     active.finish(&tok).unwrap();
 
     // Finalization prepares history; only the response writer publishes it.
@@ -206,7 +215,10 @@ fn complete(
     let session = store.lock().unwrap().show(&session_id).unwrap();
 
     assert_eq!(session["messages"][1], message);
-    assert_eq!(session["stats"]["usage"]["generated_tokens"], 1);
+    assert_eq!(
+        session["stats"]["usage"]["generated_tokens"],
+        generated_tokens
+    );
 
     if let Some(calls) = message.get("tool_calls").and_then(Value::as_array) {
         let prompt = tok
@@ -223,6 +235,119 @@ fn complete(
     }
 
     (message, reason)
+}
+
+fn complete_bytelevel(raw: &str, truncate: bool, streaming: bool) -> (Value, String) {
+    use tokenizers::{
+        models::bpe::{BPE, Vocab},
+        pre_tokenizers::byte_level::ByteLevel,
+    };
+
+    // No merges: each token represents one byte, so accented letters and
+    // emoji require several tokens before decode_stream can publish them.
+    let mut alphabet: Vec<char> = ByteLevel::alphabet().into_iter().collect();
+
+    alphabet.sort_unstable();
+
+    let model = BPE::builder()
+        .vocab_and_merges(
+            alphabet
+                .iter()
+                .enumerate()
+                .map(|(id, c)| (c.to_string(), id as u32))
+                .collect::<Vocab>(),
+            vec![],
+        )
+        .build()
+        .unwrap();
+    let mut fixture = fixture(raw, true, if truncate { "length" } else { "stop" });
+    fixture.tok.inner = tokenizers::Tokenizer::new(model);
+
+    fixture
+        .tok
+        .inner
+        .with_pre_tokenizer(Some(ByteLevel::new(false, false, false)));
+    fixture.tok.inner.with_decoder(Some(ByteLevel::default()));
+
+    let mut ids = fixture.tok.encode(raw).unwrap();
+
+    assert_eq!(ids.len(), raw.len());
+    assert_eq!(fixture.tok.decode(&ids).unwrap(), raw);
+
+    if truncate {
+        // Stop partway through the final emoji's UTF-8 encoding.
+        ids.pop();
+    }
+
+    let active = &mut fixture.active;
+    let mut decoder = fixture.tok.inner.decode_stream(false);
+    let mut withheld = 0;
+
+    for &id in &ids {
+        match decoder.step(id).unwrap() {
+            Some(delta) => active
+                .text
+                .feed(&delta, &active.output, active.response_bytes)
+                .unwrap(),
+            None => withheld += 1,
+        }
+    }
+
+    assert!(
+        withheld > 0,
+        "the real decoder must hold incomplete UTF-8 bytes"
+    );
+
+    let full = fixture.tok.decode(&ids).unwrap();
+    let expected_tail = if truncate { "�" } else { "" };
+
+    assert_eq!(full.strip_prefix(&active.text.raw), Some(expected_tail));
+
+    let Phase::Decode(decode) = &mut active.phase else {
+        unreachable!()
+    };
+    active.usage.generated_tokens = ids.len() as u64;
+    decode.tokens = ids;
+
+    finish_fixture(fixture, streaming)
+}
+
+#[test]
+fn bytelevel_tokens_preserve_unicode_content_and_structured_calls() {
+    let raw = format!("Café. {CALL}");
+
+    for streaming in [false, true] {
+        let (message, reason) = complete_bytelevel(&raw, false, streaming);
+
+        assert_eq!(message["content"], "Café.");
+        assert_eq!(message["tool_calls"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            message["tool_calls"][0]["function"]["arguments"],
+            json!({"city":"Boston"})
+        );
+        assert_eq!(reason, "tool_calls");
+    }
+}
+
+#[test]
+fn bytelevel_truncation_reconciles_withheld_bytes_before_tool_finalization() {
+    let malformed = "Café. <tool_call><function=weather><parameter=city>☕";
+    let recovered = format!("Café. {CALL}<tool_call><function=weather><parameter=city>☕");
+    let cases = [
+        ("Café ☕", "Café �".to_owned(), false),
+        (malformed, malformed.replace('☕', "�"), false),
+        (recovered.as_str(), "Café.".to_owned(), true),
+    ];
+
+    for (raw, content, calls) in cases {
+        for streaming in [false, true] {
+            let (message, reason) = complete_bytelevel(raw, true, streaming);
+
+            assert_eq!(message["content"], content);
+            assert_eq!(message.get("tool_calls").is_some(), calls);
+            assert_eq!(reason, "length");
+        }
+    }
 }
 
 #[test]
