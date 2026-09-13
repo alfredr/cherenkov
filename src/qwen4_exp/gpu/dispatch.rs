@@ -71,7 +71,7 @@ impl Gpu<'_> {
         );
     }
 
-    /// y[b] = W x[b] over `nb` prepped rows (chunks of up to 8 rows).
+    /// `y[b] = W x[b]` over `nb` prepped rows (chunks of up to 8 rows).
     pub(super) fn qmv_h(&self, enc: &Enc, q: &Q, y: &Buf, nb: usize, set: &HalfSet) {
         let p = QmvParams {
             out_dim: q.out,

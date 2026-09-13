@@ -15,7 +15,9 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Rustdoc type-checks the Apple framework dependencies.
+    runs-on: macos-26
+    timeout-minutes: 20
     steps:
       - name: Check out the repo
         uses: actions/checkout@v7
@@ -26,7 +28,18 @@ jobs:
       - name: Test the docs builder
         run: cargo test --locked -p xtask --test docs --test readme --test automation
       - name: Build the site
-        run: cargo xtask docs
+        run: cargo run --locked --package xtask -- docs
+      - name: Check the book and Rust API output
+        run: |
+          test -s _site/index.html
+          test -s _site/docs/rust-api.html
+          test -s _site/api/index.html
+          test -s _site/api/cherenkov/index.html
+          test -s _site/api/xtask/index.html
+          test -s _site/api/cherenkov/metal/index.html
+          test -s _site/api/crates.js
+          test -d _site/api/static.files
+          test -d _site/api/src
       - name: Upload the site
         uses: actions/upload-pages-artifact@v5
         with:

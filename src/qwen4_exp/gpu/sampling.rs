@@ -4,7 +4,7 @@ use super::*;
 
 impl Gpu<'_> {
     /// Final mixer read of `nb` rows of `hyper` (injecting `pending`
-    /// first), LM head into `logits` [nb][vocab], greedy argmax of each
+    /// first), LM head into `logits` `[nb][vocab]`, greedy argmax of each
     /// row into ids[ids_out + b].
     #[allow(clippy::too_many_arguments)]
     pub(super) fn head_b(

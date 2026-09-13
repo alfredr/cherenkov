@@ -3,7 +3,7 @@
 use super::*;
 
 impl Gpu<'_> {
-    /// y[b] = W x[b] for nb rows with the simdgroup-matrix GEMM: the
+    /// `y[b] = W x[b]` for nb rows with the simdgroup-matrix GEMM: the
     /// x buffer must hold rows padded to the token tile (32).
     pub(super) fn qmm_from(&self, enc: &Enc, wb: &Buf, q: &Q, x: &Buf, y: &Buf, nb: usize) {
         let p = QmvParams {

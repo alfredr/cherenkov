@@ -11,7 +11,7 @@
 //! most fetches run in the background.
 //!
 //! A step runs `nb` consecutive positions at once (activations are
-//! row-major [nb][...]). The gated DeltaNet scan snapshots its state after
+//! row-major `[nb][...]`). The gated DeltaNet scan snapshots its state after
 //! each row so a partially accepted verify batch can roll back.
 
 use super::cpu::CpuModel;
@@ -127,7 +127,7 @@ struct Attn {
     kc: Buf,
     vc: Buf,
     /// QSA indexer: the index q/k projection, its norms, the raw index
-    /// key cache [max_t][ihd] and the block keys [max_t/ratio][ihd].
+    /// key cache `[max_t][ihd]` and the block keys `[max_t/ratio][ihd]`.
     iqk: Q,
     iqn: T,
     ikn: T,
@@ -177,7 +177,7 @@ struct Ple {
     dilation: u32,
     span: u32,
     hist: Buf,
-    /// [nb][ple_embed_dim] n-gram rows gathered on the CPU.
+    /// `[nb][ple_embed_dim]` n-gram rows gathered on the CPU.
     e: Buf,
     multipliers: Vec<i64>,
     head_offsets: Vec<u64>,
@@ -343,8 +343,8 @@ struct Scratch {
     mtp_hyper: Buf,
     fe: Buf,
     fh: Buf,
-    /// Indexer: projection [nb][qk_dim], roped queries [nb][inh*ihd],
-    /// block scores [nb][max_blocks], visible tokens [nb][vis_stride].
+    /// Indexer: projection `[nb][qk_dim]`, roped queries `[nb][inh*ihd]`,
+    /// block scores `[nb][max_blocks]`, visible tokens `[nb][vis_stride]`.
     iqk: Buf,
     iq: Buf,
     bscore: Buf,
@@ -462,7 +462,7 @@ pub struct Gpu<'a> {
     mtp_len: usize,
     /// Router choices of the last step, per layer (union over rows).
     pub last_experts: Vec<Vec<u32>>,
-    /// Router choices of every step, [step][layer][union] (cache studies).
+    /// Router choices of every step, `[step][layer][union]` (cache studies).
     pub expert_history: Vec<Vec<Vec<u32>>>,
     /// Per step: the rows' tokens and, per serviced layer, every row's
     /// top-k expert ids (nb * k, row-major), for offline predictor studies.

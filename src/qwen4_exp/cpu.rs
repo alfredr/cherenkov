@@ -50,7 +50,7 @@ pub enum Mixer<'a> {
 }
 
 pub struct MoeWeights<'a> {
-    /// Router, bf16 [experts][hidden].
+    /// Router, bf16 `[experts][hidden]`.
     pub router: &'a [bf16],
     pub shared_gate: &'a [bf16],
     pub shared_up: QLinear<'a>,
@@ -65,7 +65,7 @@ pub struct PleWeights<'a> {
     pub norm_key: &'a [bf16],
     pub norm_query: &'a [bf16],
     pub norm_conv: &'a [bf16],
-    /// Depthwise dilated conv, [channels][kernel].
+    /// Depthwise dilated conv, `[channels][kernel]`.
     pub conv1d: &'a [bf16],
     pub kernel: usize,
     pub dilation: usize,
@@ -110,7 +110,7 @@ pub struct KvCache {
     /// [t][kv_heads * head_dim]
     pub k: Vec<f32>,
     pub v: Vec<f32>,
-    /// Indexer keys before norm and rope, [t][index_head_dim].
+    /// Indexer keys before norm and rope, `[t][index_head_dim]`.
     pub index_k: Vec<f32>,
     pub len: usize,
 }
@@ -121,7 +121,7 @@ pub struct DeltaState {
 }
 
 pub struct PleState {
-    /// Ring of the last `span` normalized gated values, [span][hc_hidden].
+    /// Ring of the last `span` normalized gated values, `[span][hc_hidden]`.
     pub hist: Vec<f32>,
     pub span: usize,
     pub filled: usize,

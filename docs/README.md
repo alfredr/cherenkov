@@ -1,10 +1,11 @@
 # Documentation
 
-Run `mise run docs` to build the
+Run `mise run docs` on macOS to build the
 [website](https://alfredr.github.io/cherenkov/) in `_site/`.
 `.gitattributes` selects the files and `SUMMARY.md` sets the navigation.
 Changes to `main` publish automatically.
 
+- [Rust API](rust-api.md): generated library reference, including private items.
 - [Running](running.md): CLI, HTTP API, prefix caching and precision modes.
 - [Server configuration](server-config.md): TOML, memory policy and control CLI.
 - [Statistics](stats.md): summaries, detailed JSON, and the live dashboard.
@@ -34,3 +35,20 @@ Changes to `main` publish automatically.
 | `results/` | Reviewed measurements; new local runs are ignored |
 
 Model weights and packed stores use the configured [data directory](storage.md).
+
+## Building the documentation
+
+Install Rust and mdBook with `mise install rust github:rust-lang/mdBook`, then run
+`mise run docs` (or `cargo xtask docs`). The build generates documentation for all
+workspace libraries, fails on rustdoc warnings, and publishes the complete
+reference under `_site/api/` after building the book. It needs macOS for the
+Apple framework dependencies; model weights are not required.
+
+To preview the combined site, run `python3 -m http.server --directory _site 8000`
+and visit <http://localhost:8000/>. Rebuild to pick up source changes.
+
+For just the Rust reference, run:
+
+```sh
+cargo doc --locked --workspace --no-deps --document-private-items --open
+```
