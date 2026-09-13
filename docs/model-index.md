@@ -64,9 +64,11 @@ It reads config, the shard index, and each safetensors header using byte ranges.
 Small n-gram metadata arrays may also be read, but full shards remain remote. Servers
 that ignore range requests are rejected. Remote GGUF registration is not supported.
 
-Inspection reads up to eight shard headers concurrently. The CLI reports metadata
-resolution and completed headers on stderr, including with `--json`; stdout holds
-the result. Shard names come from the weight map or repository listing.
+Inspection reads up to eight shard headers concurrently. Color terminals show a
+spinner during metadata resolution and a header progress bar with an estimated
+remaining time. Redirected stderr, `NO_COLOR`, and terminals without color use
+plain text updates. Progress stays on stderr, including with `--json`; stdout
+holds the result. Shard names come from the weight map or repository listing.
 
 Credentials come from `--hf-token`, `HF_TOKEN`, or the HF token file. The index
 stores the repository, endpoint, and commit, but no credentials.

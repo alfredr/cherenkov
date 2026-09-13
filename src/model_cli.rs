@@ -113,7 +113,8 @@ pub(crate) fn inspect(paths: Paths, input: &Path, json: bool) -> Result<()> {
 
 /// CLI commands render inspection events on stderr, leaving result output intact.
 fn select(index: &ModelIndex, input: &Path, options: ResolveOptions<'_>) -> Result<ModelDetails> {
-    let mut events = crate::cli_output::models::progress;
+    let mut progress = crate::cli_output::models::InspectionProgress::new();
+    let mut events = |event| progress.update(event);
 
     index.select(
         input,

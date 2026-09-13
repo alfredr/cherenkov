@@ -331,6 +331,7 @@ dependencies = [
  "dirs 7.0.0",
  "half",
  "hf-hub",
+ "indicatif",
  "libc",
  "memmap2",
  "minijinja",
