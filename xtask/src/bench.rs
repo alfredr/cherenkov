@@ -102,11 +102,13 @@ fn migrate_signature(signature: &mut Value, model: &Path) {
 
 fn redact_paths(text: &str, replacements: &[(&str, &str)]) -> String {
     let mut text = text.to_owned();
+
     for &(path, replacement) in replacements {
         if !path.is_empty() {
             text = text.replace(path, replacement);
         }
     }
+
     text
 }
 
@@ -133,6 +135,7 @@ fn redact_saved_metadata(report: &mut Value, binary: &Path, model: &Path) {
                         *arg = json!(replacement);
                     }
                 }
+
                 if let Some(error) = run["error"].as_str() {
                     run["error"] = json!(redact_paths(error, &replacements));
                 }
@@ -143,8 +146,10 @@ fn redact_saved_metadata(report: &mut Value, binary: &Path, model: &Path) {
     let provenance = &mut report["provenance"];
     provenance["binary"] = json!("<binary>");
     provenance["model"] = json!("<model>");
+
     if let Some(platform) = provenance["platform"].as_str() {
         let fields: Vec<_> = platform.split_whitespace().collect();
+
         // Legacy macOS reports used uname -a: sysname, hostname, release,
         // version (several words), machine. Keep the original machine facts.
         if fields.first() == Some(&"Darwin") && fields.len() > 3 {
@@ -156,6 +161,7 @@ fn redact_saved_metadata(report: &mut Value, binary: &Path, model: &Path) {
             ));
         }
     }
+
     if let Some(settings) = report.get_mut("settings") {
         settings["suite"] = json!("<suite>");
     }
