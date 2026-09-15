@@ -1,7 +1,7 @@
 //! Model-index commands resolve to library operations and shared report views.
 use anyhow::Result;
 use cherenkov::{
-    model::index::{DiskLayout, ModelIndex, ResolveOptions},
+    model::index::{DiskLayout, ModelDetails, ModelIndex, ResolveOptions},
     storage::Paths,
 };
 use clap::Subcommand;
@@ -48,11 +48,15 @@ pub(crate) fn run(paths: Paths, action: Action, json: bool) -> Result<()> {
             revision,
             hf_token,
         } => {
-            let result = index.add(
-                &source,
-                revision.as_deref(),
-                name.as_deref(),
-                hf_token.as_deref(),
+            let result = select(
+                &index,
+                Path::new(&source),
+                ResolveOptions {
+                    name: name.as_deref(),
+                    revision: revision.as_deref(),
+                    token: hf_token.as_deref(),
+                    ..Default::default()
+                },
             )?;
 
             crate::cli_output::models::show(&result, json)
@@ -83,7 +87,7 @@ pub(crate) fn prepare(
 ) -> Result<()> {
     let index = ModelIndex::new(paths);
     let token = options.token;
-    let selected = index.select(input, options)?;
+    let selected = select(&index, input, options)?;
     let result = index.pack(
         &selected.summary.id,
         cherenkov::model::index::PackOptions {
@@ -101,10 +105,32 @@ pub(crate) fn prepare(
 /// Inspect a registered artifact or register an explicit source before inspection.
 pub(crate) fn inspect(paths: Paths, input: &Path, json: bool) -> Result<()> {
     let index = ModelIndex::new(paths);
-    let selected = index.select(input, ResolveOptions::default())?;
+    let selected = select(&index, input, ResolveOptions::default())?;
     let description = index.description(&selected.summary.id)?;
 
     crate::cli_output::models::inspect_indexed(&selected, &description, json)
+}
+
+/// CLI commands render inspection events on stderr, leaving result output intact.
+fn select(index: &ModelIndex, input: &Path, options: ResolveOptions<'_>) -> Result<ModelDetails> {
+    let ResolveOptions {
+        name,
+        revision,
+        token,
+        ..
+    } = options;
+
+    crate::cli_output::models::inspect_with_progress(|events| {
+        index.select(
+            input,
+            ResolveOptions {
+                name,
+                revision,
+                token,
+                events: Some(events),
+            },
+        )
+    })
 }
 
 /// Registration and availability controls for externally owned disk stores.

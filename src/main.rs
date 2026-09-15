@@ -380,6 +380,7 @@ fn main() -> Result<()> {
                     name: name.as_deref(),
                     revision: revision.as_deref(),
                     token: hf_token.as_deref(),
+                    ..Default::default()
                 },
                 output.as_deref(),
                 &experts,

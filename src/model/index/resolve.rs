@@ -16,6 +16,11 @@ pub struct ResolveOptions<'a> {
     pub revision: Option<&'a str>,
     /// Optional credential used only if remote metadata must be fetched.
     pub token: Option<&'a str>,
+    /// Optional inspection event consumer, called serially on this calling thread
+    /// without a catalog lock. Keep handlers short; they can delay the operation.
+    /// Cached lookups emit no inspection events. Use the returned `Result` for
+    /// success or failure. Events are observational and do not control cancellation.
+    pub events: Option<&'a mut dyn FnMut(super::ModelEvent)>,
 }
 
 impl ResolveOptions<'_> {
@@ -81,6 +86,7 @@ impl ModelIndex {
                     &repo,
                     revision.as_deref().unwrap_or("main"),
                     options.token,
+                    options.events,
                 )?;
                 let id = self.register(source, description, options.name, None)?;
 

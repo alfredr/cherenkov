@@ -330,7 +330,13 @@ fn prepare_and_server_defaults_select_the_same_offline_entry() {
     assert_eq!(config.model_dir().unwrap(), source);
     assert_eq!(
         index
-            .select(&source, ResolveOptions::default())
+            .select(
+                &source,
+                ResolveOptions {
+                    events: Some(&mut |_| panic!("cached lookup emitted inspection progress")),
+                    ..Default::default()
+                },
+            )
             .unwrap()
             .summary
             .id,

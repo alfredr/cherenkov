@@ -1,6 +1,7 @@
 //! Persistent model references and explicit ownership of prepared/source stores.
 mod catalog;
 mod disk;
+mod events;
 mod gc;
 mod hub;
 mod local;
@@ -10,6 +11,7 @@ mod reference;
 mod resolve;
 mod selector;
 pub use disk::{DiskLayout, DiskStore};
+pub use events::ModelEvent;
 pub use resolve::ResolveOptions;
 mod store;
 
@@ -64,6 +66,7 @@ impl ModelIndex {
                 name,
                 revision,
                 token,
+                ..ResolveOptions::default()
             },
         )
     }
