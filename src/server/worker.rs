@@ -436,7 +436,9 @@ impl Active<'_> {
             .prompt_tokens
             .saturating_sub(self.usage.cached_tokens);
         let prefill_tps = prefill_tokens as f64 / self.usage.prefill_seconds.max(1e-9);
-        let decode_tps = decode_tokens as f64 / self.usage.decode_seconds.max(1e-9);
+        // Exclude first token from tps calculation since decode_seconds does not include it
+        let decode_tps =
+            decode_tokens.saturating_sub(1) as f64 / self.usage.decode_seconds.max(1e-9);
         let prefill_s = self.usage.prefill_seconds;
         let decode_s = self.usage.decode_seconds;
         let ctx_pos = gpu.pos;
