@@ -185,6 +185,14 @@ impl<'a> Gpu<'a> {
         let state_len = c.linear_num_value_heads * c.linear_key_head_dim * c.linear_value_head_dim;
         let hist_len = conv_dim * (c.linear_conv_kernel_dim - 1);
 
+        // The shared trunk scratch (and the per-layer DeltaNet snapshot
+        // planes and PLE n-gram row) only need to span the rows a decode step
+        // ever runs: one committed token plus the drafts, which is also the
+        // cap the prefill row path is clamped to. Without MTP the scratch
+        // holds a single row.
+        let trunk_rows = (1 + options.effective_drafts()).min(MAX_NB);
+        let snap_rows = options.effective_drafts().min(MAX_SNAP);
+
         let load_layer =
             |lp: &str, linear: bool, record_layer: usize, with_ple: bool| -> Result<GLayer> {
                 let mix = if linear {
@@ -202,8 +210,10 @@ impl<'a> Gpu<'a> {
                         o: q(&format!("{d}.out_proj"))?,
                         state: ctx.new_buffer(state_len * 4)?,
                         hist: ctx.new_buffer(hist_len * 4)?,
-                        mid: ctx.new_buffer(MAX_SNAP * state_len * 4)?,
-                        mid_hist: ctx.new_buffer(MAX_SNAP * hist_len * 4)?,
+                        // Zero-length MTL buffers are invalid; the planes are
+                        // never used when there are no drafts, so floor to 1.
+                        mid: ctx.new_buffer((snap_rows * state_len * 4).max(1))?,
+                        mid_hist: ctx.new_buffer((snap_rows * hist_len * 4).max(1))?,
                     })
                 } else {
                     let a = format!("{lp}.self_attn");
@@ -220,9 +230,11 @@ impl<'a> Gpu<'a> {
                         iqk: q(&format!("{a}.indexer.index_qk_proj"))?,
                         iqn: t(&format!("{a}.indexer.q_layernorm.weight"))?,
                         ikn: t(&format!("{a}.indexer.k_layernorm.weight"))?,
-                        ikc: ctx.new_buffer(max_t * c.indexer_head_dim * 4)?,
+                        // The QSA index caches are half precision (see the index
+                        // kernels), so each element is 2 bytes.
+                        ikc: ctx.new_buffer(max_t * c.indexer_head_dim * 2)?,
                         blk: ctx.new_buffer(
-                            (max_t / c.indexer_compress_ratio + 1) * c.indexer_head_dim * 4,
+                            (max_t / c.indexer_compress_ratio + 1) * c.indexer_head_dim * 2,
                         )?,
                     })
                 };
@@ -251,7 +263,7 @@ impl<'a> Gpu<'a> {
                         dilation: c.ngram_size as u32,
                         span,
                         hist: ctx.new_buffer(span as usize * hh * 4)?,
-                        e: ctx.new_buffer(MAX_NB * c.ple_embed_dim * 4)?,
+                        e: ctx.new_buffer(trunk_rows * c.ple_embed_dim * 4)?,
                         multipliers: ngram.multipliers,
                         head_offsets: ngram.head_offsets,
                         head_sizes: ngram.head_sizes,
@@ -333,69 +345,84 @@ impl<'a> Gpu<'a> {
         };
         let hc_bufs = || -> Result<HcBufs> {
             Ok(HcBufs {
-                normed: ctx.new_buffer(MAX_NB * hh * 4)?,
-                d: ctx.new_buffer(MAX_NB * c.hc_lowrank * 4)?,
-                u: ctx.new_buffer(MAX_NB * hh * 4)?,
-                mixed: ctx.new_buffer(MAX_NB * h * 4)?,
-                inj: ctx.new_buffer(MAX_NB * c.hc_count * 4)?,
-                h1: half_set(MAX_NB, max_in)?,
-                h2: half_set(MAX_NB, max_in)?,
+                normed: ctx.new_buffer(trunk_rows * hh * 4)?,
+                d: ctx.new_buffer(trunk_rows * c.hc_lowrank * 4)?,
+                u: ctx.new_buffer(trunk_rows * hh * 4)?,
+                mixed: ctx.new_buffer(trunk_rows * h * 4)?,
+                inj: ctx.new_buffer(trunk_rows * c.hc_count * 4)?,
+                h1: half_set(trunk_rows, max_in)?,
+                h2: half_set(trunk_rows, max_in)?,
             })
         };
-        let n_u_max = c.num_experts_per_tok * MAX_NB + 1;
+        // The routed-expert buffers are laid out as [expert][row]; with at
+        // most `trunk_rows` rows per step the largest union of routed
+        // experts is `trunk_rows * k + 1` (last = shared) and its rows are
+        // `trunk_rows`.
+        let n_u_max = c.num_experts_per_tok * trunk_rows + 1;
+        // The MTP scratch is only ever read when the draft head is present, so
+        // it sizes to zero otherwise (multiply by 0).
+        let use_mtp = usize::from(mtp.is_some() && options.drafts > 0);
+        // Zero-length MTL buffers are invalid; they are never read when the
+        // head is absent, so floor the gated sizes to a byte.
+        let mtp_logits = (trunk_rows * vocab * 4 * use_mtp).max(1);
+        let mtp_logits2 = (vocab * 4 * use_mtp).max(1);
+        let mtp_hyper = (trunk_rows * hh * 4 * use_mtp).max(1);
         let scratch = Scratch {
             ids: ctx.new_buffer(64 * 4)?,
-            e: ctx.new_buffer(MAX_NB * h * 4)?,
-            hyper: ctx.new_buffer(MAX_NB * hh * 4)?,
+            e: ctx.new_buffer(trunk_rows * h * 4)?,
+            hyper: ctx.new_buffer(trunk_rows * hh * 4)?,
             hc: hc_bufs()?,
             la: hc_bufs()?,
-            mix_out: ctx.new_buffer(MAX_NB * h * 4)?,
-            qg: ctx.new_buffer(MAX_NB * c.num_attention_heads * c.head_dim * 2 * 4)?,
-            k: ctx.new_buffer(MAX_NB * kv_row * 4)?,
-            v: ctx.new_buffer(MAX_NB * kv_row * 4)?,
-            attn_out: ctx.new_buffer(MAX_NB * c.num_attention_heads * c.head_dim * 4)?,
+            mix_out: ctx.new_buffer(trunk_rows * h * 4)?,
+            qg: ctx.new_buffer(trunk_rows * c.num_attention_heads * c.head_dim * 2 * 4)?,
+            k: ctx.new_buffer(trunk_rows * kv_row * 4)?,
+            v: ctx.new_buffer(trunk_rows * kv_row * 4)?,
+            attn_out: ctx.new_buffer(trunk_rows * c.num_attention_heads * c.head_dim * 4)?,
             attn_parts: ctx.new_buffer(c.num_attention_heads * max_blk * (2 + c.head_dim) * 4)?,
-            qkv: ctx.new_buffer(MAX_NB * conv_dim * 4)?,
-            z: ctx.new_buffer(MAX_NB * v_dim * 4)?,
-            a: ctx.new_buffer(MAX_NB * c.linear_num_value_heads * 4)?,
-            b: ctx.new_buffer(MAX_NB * c.linear_num_value_heads * 4)?,
-            kqn: ctx.new_buffer(MAX_NB * 2 * c.linear_num_key_heads * c.linear_key_head_dim * 4)?,
-            gbuf: ctx.new_buffer(MAX_NB * c.linear_num_value_heads * 2 * 4)?,
-            delta_y: ctx.new_buffer(MAX_NB * v_dim * 4)?,
-            router: ctx.new_buffer(MAX_NB * c.num_experts * 4)?,
-            topk_idx: ctx.new_buffer(MAX_NB * c.num_experts_per_tok * 4)?,
-            topk_w: ctx.new_buffer(MAX_NB * c.num_experts_per_tok * 4)?,
-            la_router: ctx.new_buffer(MAX_NB * c.num_experts * 4)?,
-            la_idx: ctx.new_buffer(MAX_NB * 32 * 4)?,
-            la_w: ctx.new_buffer(MAX_NB * 32 * 4)?,
-            gate_e: ctx.new_buffer(n_u_max * MAX_NB * 2 * inter * 4)?,
-            hx: half_set(n_u_max * MAX_NB, inter)?,
-            y_e: ctx.new_buffer(n_u_max * MAX_NB * h * 4)?,
-            moe_out: ctx.new_buffer(MAX_NB * h * 4)?,
-            ple_key: ctx.new_buffer(MAX_NB * hh * 4)?,
-            ple_keyn: ctx.new_buffer(MAX_NB * hh * 4)?,
-            ple_value: ctx.new_buffer(MAX_NB * h * 4)?,
-            ple_query: ctx.new_buffer(MAX_NB * hh * 4)?,
-            ple_gated: ctx.new_buffer(MAX_NB * hh * 4)?,
-            ple_gvn: ctx.new_buffer(MAX_NB * hh * 4)?,
-            ple_out: ctx.new_buffer(MAX_NB * hh * 4)?,
-            logits: ctx.new_buffer(MAX_NB * vocab * 4)?,
-            mtp_logits: ctx.new_buffer(MAX_NB * vocab * 4)?,
-            mtp_logits2: ctx.new_buffer(vocab * 4)?,
+            qkv: ctx.new_buffer(trunk_rows * conv_dim * 4)?,
+            z: ctx.new_buffer(trunk_rows * v_dim * 4)?,
+            a: ctx.new_buffer(trunk_rows * c.linear_num_value_heads * 4)?,
+            b: ctx.new_buffer(trunk_rows * c.linear_num_value_heads * 4)?,
+            kqn: ctx
+                .new_buffer(trunk_rows * 2 * c.linear_num_key_heads * c.linear_key_head_dim * 4)?,
+            gbuf: ctx.new_buffer(trunk_rows * c.linear_num_value_heads * 2 * 4)?,
+            delta_y: ctx.new_buffer(trunk_rows * v_dim * 4)?,
+            router: ctx.new_buffer(trunk_rows * c.num_experts * 4)?,
+            topk_idx: ctx.new_buffer(trunk_rows * c.num_experts_per_tok * 4)?,
+            topk_w: ctx.new_buffer(trunk_rows * c.num_experts_per_tok * 4)?,
+            la_router: ctx.new_buffer(trunk_rows * c.num_experts * 4)?,
+            la_idx: ctx.new_buffer(trunk_rows * 32 * 4)?,
+            la_w: ctx.new_buffer(trunk_rows * 32 * 4)?,
+            gate_e: ctx.new_buffer(n_u_max * trunk_rows * 2 * inter * 4)?,
+            hx: half_set(n_u_max * trunk_rows, inter)?,
+            y_e: ctx.new_buffer(n_u_max * trunk_rows * h * 4)?,
+            moe_out: ctx.new_buffer(trunk_rows * h * 4)?,
+            ple_key: ctx.new_buffer(trunk_rows * hh * 4)?,
+            ple_keyn: ctx.new_buffer(trunk_rows * hh * 4)?,
+            ple_value: ctx.new_buffer(trunk_rows * h * 4)?,
+            ple_query: ctx.new_buffer(trunk_rows * hh * 4)?,
+            ple_gated: ctx.new_buffer(trunk_rows * hh * 4)?,
+            ple_gvn: ctx.new_buffer(trunk_rows * hh * 4)?,
+            ple_out: ctx.new_buffer(trunk_rows * hh * 4)?,
+            logits: ctx.new_buffer(trunk_rows * vocab * 4)?,
+            mtp_logits: ctx.new_buffer(mtp_logits)?,
+            mtp_logits2: ctx.new_buffer(mtp_logits2)?,
             partials: ctx.new_buffer(ARGMAX_TGS * 8)?,
-            mtp_hyper: ctx.new_buffer(MAX_NB * hh * 4)?,
-            fe: ctx.new_buffer(MAX_NB * h * 4)?,
-            fh: ctx.new_buffer(MAX_NB * hh * 4)?,
-            iqk: ctx.new_buffer(MAX_NB * (c.indexer_n_heads + 1) * c.indexer_head_dim * 4)?,
-            iq: ctx.new_buffer(MAX_NB * c.indexer_n_heads * c.indexer_head_dim * 4)?,
-            bscore: ctx.new_buffer(MAX_NB * (max_t / c.indexer_compress_ratio + 1) * 4)?,
-            vis: ctx.new_buffer(MAX_NB * (c.indexer_budget + c.indexer_compress_ratio) * 4)?,
-            nvis: ctx.new_buffer(MAX_NB * 4)?,
+            mtp_hyper: ctx.new_buffer(mtp_hyper)?,
+            fe: ctx.new_buffer(trunk_rows * h * 4)?,
+            fh: ctx.new_buffer(trunk_rows * hh * 4)?,
+            iqk: ctx.new_buffer(trunk_rows * (c.indexer_n_heads + 1) * c.indexer_head_dim * 4)?,
+            iq: ctx.new_buffer(trunk_rows * c.indexer_n_heads * c.indexer_head_dim * 4)?,
+            bscore: ctx.new_buffer(trunk_rows * (max_t / c.indexer_compress_ratio + 1) * 4)?,
+            vis: ctx.new_buffer(trunk_rows * (c.indexer_budget + c.indexer_compress_ratio) * 4)?,
+            nvis: ctx.new_buffer(trunk_rows * 4)?,
             vmask: ctx
-                .new_buffer(MAX_NB * (max_t / c.indexer_compress_ratio + 1).div_ceil(32) * 4)?,
+                .new_buffer(trunk_rows * (max_t / c.indexer_compress_ratio + 1).div_ceil(32) * 4)?,
         };
         let n_records = p.manifest.experts.layers * p.manifest.experts.experts;
         let stride = p.manifest.experts.record_stride as usize;
+        // `wmap` is `[layer][MAX_NB][SLOT_STRIDE]`: the combine kernel strides
+        // it by the compile-time MAX_NB, so it stays at the full width.
         let n_rows = c.num_hidden_layers + 1;
         let slot_tab = ctx.new_buffer(n_rows * SLOT_STRIDE * 8)?;
         let wmap = ctx.new_buffer(n_rows * MAX_NB * SLOT_STRIDE * 4)?;
@@ -591,6 +618,7 @@ impl<'a> Gpu<'a> {
             mtp,
             scratch,
             max_t,
+            trunk_rows,
             pos: 0,
             tokens: Vec::new(),
             batch_pos: 0,

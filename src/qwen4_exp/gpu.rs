@@ -450,6 +450,10 @@ pub struct Gpu<'a> {
     lm_head: Q,
     scratch: Scratch,
     pub max_t: usize,
+    /// Trunk rows per step the shared scratch is sized for: `1 + drafts`
+    /// (clamped to `MAX_NB`). Decode verify and the prefill row path share
+    /// the trunk scratch, so the row cap they may use is exactly this.
+    trunk_rows: usize,
     /// Committed positions.
     pub pos: usize,
     /// Committed tokens, plus the rows of the step in flight.
@@ -566,6 +570,12 @@ impl<'a> Gpu<'a> {
         self.mtp.is_some()
     }
 
+    /// Rows per step the shared trunk scratch is sized for (the row cap the
+    /// decode verify path and the short-prompt prefill row path may use).
+    pub(crate) fn trunk_rows(&self) -> usize {
+        self.trunk_rows
+    }
+
     fn skips(&self, stage: &str) -> bool {
         self.skip.iter().any(|s| s == stage)
     }
@@ -631,7 +641,9 @@ impl<'a> Gpu<'a> {
         let ihd = c.indexer_head_dim;
         let ratio = c.indexer_compress_ratio.max(1);
 
-        2 * (n * kv_row + n * kv_row / 32 * 2) + n * ihd * 4 + n.div_ceil(ratio) * ihd * 4
+        // The QSA index key cache and the block keys are half precision, so
+        // each index element is 2 bytes (the raw ikc and compressed blk).
+        2 * (n * kv_row + n * kv_row / 32 * 2) + n * ihd * 2 + n.div_ceil(ratio) * ihd * 2
     }
 
     /// Trunk attention (KV) layers; DeltaNet layers hold no positional KV.

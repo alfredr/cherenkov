@@ -20,9 +20,12 @@ impl Gpu<'_> {
 
         self.folded_mtp = None;
 
+        // The shared scratch spans `trunk_rows` rows: one committed token
+        // plus the drafts. The prefill row path is clamped to the same cap.
         anyhow::ensure!(
-            (1..=MAX_NB).contains(&nb),
-            "rows per step must be 1..={MAX_NB}"
+            (1..=self.trunk_rows).contains(&nb),
+            "rows per step must be 1..={} (set --drafts to raise it)",
+            self.trunk_rows
         );
         anyhow::ensure!(self.pos + nb <= self.max_t, "context capacity exceeded");
         anyhow::ensure!(

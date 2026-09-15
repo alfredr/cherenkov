@@ -186,8 +186,10 @@ fn index_pipeline_matches_cpu() {
     let max_blocks = t_total / g.ratio + 1;
     let vis_stride = g.k * g.ratio + g.ratio;
     let iqk_b = upload(&ctx, &iqk);
-    let ikc_b = upload(&ctx, &ikc);
-    let blk_b = ctx.new_buffer(max_blocks * g.ihd * 4).unwrap();
+    // The persistent index caches are half precision.
+    let ikc_f16: Vec<half::f16> = ikc.iter().map(|&v| half::f16::from_f32(v)).collect();
+    let ikc_b = upload::<half::f16>(&ctx, &ikc_f16);
+    let blk_b = ctx.new_buffer(max_blocks * g.ihd * 2).unwrap();
     let wq_b = upload(&ctx, &wq);
     let wk_b = upload(&ctx, &wk);
     let iq_b = ctx.new_buffer(nb * g.inh * g.ihd * 4).unwrap();

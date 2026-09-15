@@ -105,11 +105,12 @@ impl Gpu<'_> {
                         regions.push((b, scales, n * kv_row / 32 * 2));
                     }
 
-                    regions.push((&a.ikc, 0, n * c.indexer_head_dim * 4));
+                    // The QSA index caches are half precision (2 bytes each).
+                    regions.push((&a.ikc, 0, n * c.indexer_head_dim * 2));
                     regions.push((
                         &a.blk,
                         0,
-                        n.div_ceil(c.indexer_compress_ratio) * c.indexer_head_dim * 4,
+                        n.div_ceil(c.indexer_compress_ratio) * c.indexer_head_dim * 2,
                     ));
                 }
             }

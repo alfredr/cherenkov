@@ -52,10 +52,11 @@ impl Gpu<'_> {
         let h = c.hidden_size as u32;
         let hh = c.hc_hidden();
         let dim = self.p.manifest.ngram.dim;
+        // `nb` never exceeds the trunk row cap the buffer is sized for.
         let e = unsafe {
             std::slice::from_raw_parts_mut(
                 pl.e.contents().cast::<f32>().as_ptr(),
-                MAX_NB * c.ple_embed_dim,
+                self.trunk_rows * c.ple_embed_dim,
             )
         };
         let t_gather = std::time::Instant::now();

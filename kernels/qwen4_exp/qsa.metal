@@ -25,24 +25,27 @@ struct IndexParams {
     uint mask_words; // block bitmask row stride (u32 words)
 };
 
-// ikc[base_pos + b][d] = iqk[b][inh*ihd + d]
+// ikc[base_pos + b][d] = iqk[b][inh*ihd + d], kept as half precision.
 kernel void fn_index_append(
     device const float* iqk [[buffer(0)]],
-    device float*       ikc [[buffer(1)]],
+    device half*        ikc [[buffer(1)]],
     constant IndexParams& p [[buffer(2)]],
     uint gi [[thread_position_in_grid]])
 {
     if (gi >= p.nb * p.ihd) return;
     const uint b = gi / p.ihd;
     const uint d = gi % p.ihd;
-    ikc[(ulong)(p.base_pos + b) * p.ihd + d] = iqk[(ulong)b * p.qk_dim + p.inh * p.ihd + d];
+    ikc[(ulong)(p.base_pos + b) * p.ihd + d] =
+        (half)iqk[(ulong)b * p.qk_dim + p.inh * p.ihd + d];
 }
 
 // RMSNorm of the `ihd` values held one per thread, times w, then partial
 // rope (rotate_half pairing over the first `rot` dims) at `pos`; result
-// written to dst. Threadgroup = ihd threads.
+// written to dst (float or half), then a per-`rot` half-step rope. The block
+// keys (half) and the roped queries (float) both use this helper.
+template <typename Dst>
 static inline void fn_index_norm_rope(
-    float v, device const bfloat* w, device float* dst, constant IndexParams& p, uint pos,
+    float v, device const bfloat* w, device Dst* dst, constant IndexParams& p, uint pos,
     threadgroup float* red, threadgroup float* vals, uint d, uint sgid, uint lane)
 {
     float ss = simd_sum(v * v);
@@ -62,18 +65,18 @@ static inline void fn_index_norm_rope(
         const float s = sin(angle);
         const float a = vals[d];
         const float bb = vals[d + hr];
-        dst[d] = a * c - bb * s;
-        dst[d + hr] = bb * c + a * s;
+        dst[d] = (Dst)(a * c - bb * s);
+        dst[d + hr] = (Dst)(bb * c + a * s);
     } else if (d >= p.rot) {
-        dst[d] = val;
+        dst[d] = (Dst)val;
     }
 }
 
 // One threadgroup (ihd threads) per block in [b0, b1): its key from the
 // cached raw keys.
 kernel void fn_index_blocks(
-    device const float*  ikc [[buffer(0)]],
-    device float*        blk [[buffer(1)]],
+    device const half*   ikc [[buffer(0)]],
+    device half*         blk [[buffer(1)]],
     device const bfloat* w   [[buffer(2)]],
     constant IndexParams& p  [[buffer(3)]],
     uint tg   [[threadgroup_position_in_grid]],
@@ -86,9 +89,11 @@ kernel void fn_index_blocks(
     const uint b = p.b0 + tg;
     if (b >= p.b1) return;
     float acc = 0.0f;
-    for (uint t = 0; t < p.ratio; t++) acc += ikc[(ulong)(b * p.ratio + t) * p.ihd + d];
+    for (uint t = 0; t < p.ratio; t++)
+        acc += (float)ikc[(ulong)(b * p.ratio + t) * p.ihd + d];
     acc /= (float)p.ratio;
-    fn_index_norm_rope(acc, w, blk + (ulong)b * p.ihd, p, b * p.ratio, red, vals, d, sgid, lane);
+    fn_index_norm_rope(acc, w, blk + (ulong)b * p.ihd, p, b * p.ratio, red,
+                       vals, d, sgid, lane);
 }
 
 // One threadgroup (ihd threads) per (row, index head): the roped query.
@@ -107,16 +112,17 @@ kernel void fn_index_q(
     const uint b = tg / p.inh;
     const uint h = tg % p.inh;
     const float v = iqk[(ulong)b * p.qk_dim + h * p.ihd + d];
-    fn_index_norm_rope(v, w, iq + ((ulong)b * p.inh + h) * p.ihd, p, p.base_pos + b, red, vals, d, sgid, lane);
+    fn_index_norm_rope(v, w, iq + ((ulong)b * p.inh + h) * p.ihd, p, p.base_pos + b, red,
+                       vals, d, sgid, lane);
 }
 
 // score[b][j] = sum_h relu(iq[b][h] . blk[j]) / sqrt(ihd) for the complete
 // blocks of row b. Threadgroups of 256 blocks per row.
 kernel void fn_index_score(
-    device const float* iq    [[buffer(0)]],
-    device const float* blk   [[buffer(1)]],
-    device float*       score [[buffer(2)]],
-    constant IndexParams& p   [[buffer(3)]],
+    device const float*   iq    [[buffer(0)]],
+    device const half*    blk   [[buffer(1)]],
+    device float*         score [[buffer(2)]],
+    constant IndexParams& p     [[buffer(3)]],
     uint tg  [[threadgroup_position_in_grid]],
     uint tid [[thread_position_in_threadgroup]])
 {
@@ -129,11 +135,11 @@ kernel void fn_index_score(
     threadgroup_barrier(mem_flags::mem_threadgroup);
     const uint blocks = (p.base_pos + b + 1) / p.ratio;
     if (j >= blocks) return;
-    device const float* key = blk + (ulong)j * p.ihd;
+    device const half* key = blk + (ulong)j * p.ihd;
     float acc = 0.0f;
     for (uint h = 0; h < p.inh; h++) {
         float dot = 0.0f;
-        for (uint d = 0; d < p.ihd; d++) dot += q[h * p.ihd + d] * key[d];
+        for (uint d = 0; d < p.ihd; d++) dot += q[h * p.ihd + d] * (float)key[d];
         acc += max(dot, 0.0f);
     }
     score[(ulong)b * p.max_blocks + j] = acc / sqrt((float)p.ihd);

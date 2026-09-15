@@ -233,6 +233,9 @@ impl Prefill {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(MAX_NB)
                 .clamp(1, MAX_NB)
+                // The short-row path runs the shared trunk scratch, which is
+                // sized for one committed token plus the drafts.
+                .min(gpu.trunk_rows())
         };
         let n = chunk_len(remaining, capacity, quantum)?;
         let pos = gpu.pos;

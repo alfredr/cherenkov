@@ -196,12 +196,15 @@ fn prefill_row_batches(
     use qwen4_exp::gpu::MAX_NB;
 
     let (mut p, mut cur, mut drafts) = (0, ids[0], Vec::new());
-    // Debug: CHERENKOV_ROWS_MAX caps rows per step in this path.
+    // Debug: CHERENKOV_ROWS_MAX caps rows per step in this path. The shared
+    // trunk scratch is sized for one committed token plus the drafts, so the
+    // path is clamped to that cap (it runs `step_rows` like decode).
     let rows_max: usize = std::env::var("CHERENKOV_ROWS_MAX")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(MAX_NB)
-        .clamp(1, MAX_NB);
+        .clamp(1, MAX_NB)
+        .min(gpu.trunk_rows());
 
     while p < ids.len() {
         let n = (ids.len() - p).min(rows_max);
