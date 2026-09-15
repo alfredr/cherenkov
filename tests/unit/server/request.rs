@@ -118,6 +118,25 @@ fn chat_template_preserves_roles_and_defaults() {
 }
 
 #[test]
+fn chat_request_accepts_typed_text_content_parts() {
+    let body = json!({
+        "messages": [
+            {"role": "system", "content": "Be brief."},
+            {"role": "user", "content": [{"type": "text", "text": "Hi"}]},
+        ],
+        "stream": true,
+        "stream_options": {"include_usage": true},
+        "max_completion_tokens": 17,
+    });
+    let r = parse_request(&body, ApiKind::Chat, &Defaults::default(), None).unwrap();
+
+    assert_eq!(
+        r.prompt.text,
+        "<|im_start|>system\nBe brief.<|im_end|>\n<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    );
+}
+
+#[test]
 fn reject_unsupported_generation_instead_of_ignoring_it() {
     for extra in [
         json!({"temperature":-0.7}),
@@ -160,6 +179,24 @@ fn reject_unsupported_generation_instead_of_ignoring_it() {
     assert!(
         parse_request(
             &json!({"messages":[{"role":"user","content":[{"type":"image_url"}]}]}),
+            ApiKind::Chat,
+            &Defaults::default(),
+            None,
+        )
+        .is_err()
+    );
+    assert!(
+        parse_request(
+            &json!({"messages":[{"role":"user","content":["hello"]}]}),
+            ApiKind::Chat,
+            &Defaults::default(),
+            None,
+        )
+        .is_err()
+    );
+    assert!(
+        parse_request(
+            &json!({"messages":[{"role":"user","content":[{"type":"text"}]}]}),
             ApiKind::Chat,
             &Defaults::default(),
             None,

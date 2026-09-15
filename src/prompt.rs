@@ -153,12 +153,53 @@ pub(crate) fn valid_function_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+/// Validate typed parts and keep only the fields used by their declared type.
+/// The checkpoint template checks media keys before text, so extra fields
+/// must not reach it and change a text part into an image or video placeholder.
+fn normalize_content(message: &mut Value) -> Result<()> {
+    for part in message
+        .get_mut("content")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        let obj = if part.is_string() {
+            anyhow::bail!("content parts must be typed objects")
+        } else {
+            part.as_object()
+                .ok_or_else(|| anyhow::anyhow!("content parts must be typed objects"))?
+        };
+        let typ = obj.get("type").and_then(|v| v.as_str());
+
+        match typ {
+            Some("text") => {
+                let text = obj
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .context("text content part requires a string 'text'")?;
+
+                *part = json!({"type": "text", "text": text});
+            }
+            Some("image") | Some("image_url") => {
+                anyhow::bail!("image input is not supported")
+            }
+            Some("video") => anyhow::bail!("video input is not supported"),
+            Some(other) => anyhow::bail!("content part type '{other}' is not supported"),
+            None => anyhow::bail!("content parts must be typed objects"),
+        }
+    }
+
+    Ok(())
+}
+
 fn text_messages(messages: &[Value]) -> Result<Vec<Value>> {
     ensure!(!messages.is_empty(), "messages must not be empty");
 
     let mut messages = messages.to_vec();
 
     for (index, message) in messages.iter_mut().enumerate() {
+        normalize_content(message)?;
+
         let role = message["role"]
             .as_str()
             .context("message role must be a string")?
@@ -185,7 +226,7 @@ fn text_messages(messages: &[Value]) -> Result<Vec<Value>> {
 
 fn validate_plain_message(message: &Value) -> Result<()> {
     ensure!(
-        message["content"].is_string(),
+        message["content"].is_string() || message["content"].is_array(),
         "message content must be text"
     );
     ensure!(
@@ -207,7 +248,7 @@ fn validate_plain_message(message: &Value) -> Result<()> {
 
 fn validate_tool_message(message: &Value, index: usize) -> Result<()> {
     ensure!(
-        message["content"].is_string(),
+        message["content"].is_string() || message["content"].is_array(),
         "tool message {index} content must be text"
     );
     ensure!(
@@ -247,7 +288,9 @@ fn ensure_reasoning_content_absent(message: &Value) -> Result<()> {
 
 fn validate_assistant_message(message: &mut Value, index: usize) -> Result<()> {
     ensure!(
-        message["content"].is_string() || message["content"].is_null(),
+        message["content"].is_string()
+            || message["content"].is_array()
+            || message["content"].is_null(),
         "assistant message {index} content must be text or null"
     );
     ensure!(

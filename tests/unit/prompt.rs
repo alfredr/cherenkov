@@ -199,6 +199,73 @@ fn weather_tool() -> Value {
 }
 
 #[test]
+fn typed_text_content_parts_render_like_string_content() {
+    let template = fixture_template();
+
+    let messages = |content: Value| {
+        vec![
+            json!({"role": "system", "content": "Be brief."}),
+            json!({"role": "user", "content": content}),
+        ]
+    };
+
+    let typed = template
+        .chat(&messages(json!([{"type": "text", "text": "Hi"}])), None)
+        .unwrap();
+    let plain = template.chat(&messages(json!("Hi")), None).unwrap();
+
+    assert_eq!(typed.text, plain.text);
+    assert_eq!(typed.boundaries, plain.boundaries);
+
+    let multi = template
+        .chat(
+            &messages(json!([{"type": "text", "text": "a"}, {"type": "text", "text": "b"}])),
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(
+        multi.text,
+        template.chat(&messages(json!("ab")), None).unwrap().text
+    );
+
+    // The template renders typed parts; shapes it cannot honor are rejected
+    // before rendering: untyped string parts, text parts without text, media
+    // parts, and non-object parts.
+    for content in [
+        json!(["hello"]),
+        json!([{"type": "text"}]),
+        json!([{"type": "image_url", "image_url": {"url": "x"}}]),
+        json!([1]),
+    ] {
+        assert!(
+            template.chat(&messages(content.clone()), None).is_err(),
+            "{content}"
+        );
+    }
+}
+
+#[test]
+fn typed_text_content_parts_ignore_extra_media_fields() {
+    let template = fixture_template();
+    let plain = template.user("Hello").unwrap();
+
+    for key in ["image", "image_url", "video"] {
+        for value in [Value::Null, json!({"url": "unused"})] {
+            let mut part = json!({"type": "text", "text": "Hello"});
+
+            part[key] = value;
+
+            let messages = vec![json!({"role": "user", "content": [part]})];
+            let typed = template.chat(&messages, None).unwrap();
+
+            assert_eq!(typed.text, plain.text, "{key}");
+            assert_eq!(typed.boundaries, plain.boundaries, "{key}");
+        }
+    }
+}
+
+#[test]
 fn chat_tools_render_the_tool_block() {
     let template = fixture_template();
     let before = template
