@@ -153,11 +153,16 @@ pub(crate) fn valid_function_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-/// Arrays pass through to the checkpoint template, whose content macro
-/// renders the typed parts; only part shapes the template cannot honor are
-/// rejected here.
-fn validate_content(message: &Value) -> Result<()> {
-    for part in message["content"].as_array().into_iter().flatten() {
+/// Validate typed parts and keep only the fields used by their declared type.
+/// The checkpoint template checks media keys before text, so extra fields
+/// must not reach it and change a text part into an image or video placeholder.
+fn normalize_content(message: &mut Value) -> Result<()> {
+    for part in message
+        .get_mut("content")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
         let obj = if part.is_string() {
             anyhow::bail!("content parts must be typed objects")
         } else {
@@ -168,9 +173,12 @@ fn validate_content(message: &Value) -> Result<()> {
 
         match typ {
             Some("text") => {
-                obj.get("text")
+                let text = obj
+                    .get("text")
                     .and_then(|v| v.as_str())
                     .context("text content part requires a string 'text'")?;
+
+                *part = json!({"type": "text", "text": text});
             }
             Some("image") | Some("image_url") => {
                 anyhow::bail!("image input is not supported")
@@ -190,7 +198,8 @@ fn text_messages(messages: &[Value]) -> Result<Vec<Value>> {
     let mut messages = messages.to_vec();
 
     for (index, message) in messages.iter_mut().enumerate() {
-        validate_content(message)?;
+        normalize_content(message)?;
+
         let role = message["role"]
             .as_str()
             .context("message role must be a string")?
